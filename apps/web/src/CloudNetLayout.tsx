@@ -1019,12 +1019,38 @@ export const CloudNetLayout: React.FC = () => {
                     }
                   />
                   <div
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 6
-                    }}
-                  >
+  style={{
+    display: "flex",
+    alignItems: "center",
+    gap: 6
+  }}
+>
+  {isMobile && activeChatId && (
+    <button
+      style={{
+        background: "transparent",
+        border: "none",
+        color: theme.textMuted,
+        fontSize: 20,
+        marginRight: 8,
+        cursor: "pointer"
+      }}
+      onClick={() => setActiveChatId(null)}
+    >
+      ☰
+    </button>
+  )}
+
+  <span
+    style={{
+      fontSize: 18,
+      color: theme.textMuted
+    }}
+  >
+    #
+  </span>
+</div>
+
                     <button
                       type="submit"
                       style={{
