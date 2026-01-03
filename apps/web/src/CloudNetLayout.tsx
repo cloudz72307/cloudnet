@@ -54,7 +54,7 @@ type Theme = {
   danger: string;
 };
 
-type ViewMode = "home" | "createServer" | "chat";
+type ViewMode = "home" | "createServer" | "chat" | "discoverServers";
 
 type AppMode = "chooseAccount" | "addAccount" | "login" | "app";
 
@@ -74,7 +74,6 @@ const makeTheme = (accent: string): Theme => ({
 });
 
 const DEFAULT_ACCENT = "#4c7dff";
-
 const LS_KEY_ACCENT = "cloudnet_accent";
 
 const createId = (prefix: string) =>
@@ -91,7 +90,7 @@ const useIsMobile = () => {
   return isMobile;
 };
 
-// ========= Initial data (no users, safe) =========
+// ========= Initial data =========
 
 const initialUsers: User[] = []; // no default accounts, no personal data
 
@@ -101,10 +100,28 @@ const initialChats: Chat[] = [
     name: "general",
     kind: "server",
     members: []
+  },
+  {
+    id: "c_server_lounge",
+    name: "lounge",
+    kind: "server",
+    members: []
+  },
+  {
+    id: "c_server_lab",
+    name: "lab",
+    kind: "server",
+    members: []
   }
 ];
 
 const initialMessages: Message[] = [];
+
+const publicServers = [
+  { id: "c_server_general", name: "general" },
+  { id: "c_server_lounge", name: "lounge" },
+  { id: "c_server_lab", name: "lab" }
+];
 
 // ========= Main component =========
 
@@ -158,14 +175,15 @@ const CloudNetLayout: React.FC = () => {
   // ========= WebSocket client =========
 
   useEffect(() => {
-    // Use current origin, just swap http -> ws
-    const wsUrl = window.location.origin.replace(/^http/, "ws");
+    const hostname = window.location.hostname;
+    const port = window.location.port || "5173";
+    const wsUrl = `ws://${hostname}:${port}`;
 
     const socket = new WebSocket(wsUrl);
     ws.current = socket;
 
     socket.onopen = () => {
-      // Optional: console.log("[CloudNET] WebSocket connected");
+      // console.log("[CloudNET] WebSocket connected");
     };
 
     socket.onmessage = event => {
@@ -174,7 +192,6 @@ const CloudNetLayout: React.FC = () => {
         if (!msg || !msg.id || !msg.chatId) return;
 
         setMessages(prev => {
-          // avoid duplicate messages if any
           if (prev.some(m => m.id === msg.id)) return prev;
           return [...prev, msg];
         });
@@ -184,23 +201,17 @@ const CloudNetLayout: React.FC = () => {
     };
 
     socket.onerror = () => {
-      // Optional: you could show a small "offline" indicator somewhere
       // console.warn("[CloudNET] WebSocket error");
     };
 
     socket.onclose = () => {
-      // Optional: console.log("[CloudNET] WebSocket disconnected");
+      // console.log("[CloudNET] WebSocket disconnected");
     };
 
     return () => {
       socket.close();
     };
   }, []);
-
-  // admin target (not heavily used yet)
-  const [adminSelectedUserId, setAdminSelectedUserId] = useState<string | null>(
-    null
-  );
 
   // ========= persistence =========
 
@@ -391,15 +402,13 @@ const CloudNetLayout: React.FC = () => {
       createdAt: now
     };
 
-    // send to WebSocket server (it will broadcast to all clients)
     if (ws.current && ws.current.readyState === WebSocket.OPEN) {
       try {
         ws.current.send(JSON.stringify(msg));
       } catch {
-        // optional: handle send error
+        setMessages(prev => [...prev, msg]);
       }
     } else {
-      // fallback: local-only (so you don't lose message if WS is down)
       setMessages(prev => [...prev, msg]);
     }
 
@@ -443,236 +452,89 @@ const CloudNetLayout: React.FC = () => {
     setActiveChatId(null);
   };
 
+  const handleSwitchToDiscoverServers = () => {
+    setViewMode("discoverServers");
+    setActiveChatId(null);
+  };
+
   const handleMobileBackToSidebar = () => {
     setActiveChatId(null);
     setViewMode("home");
   };
 
-  // ========= moderator actions =========
-
-  const safeOwnerGuard = (targetId: string) => {
-    const u = getUserById(targetId);
-    if (!u) return false;
-    if (u.username.toLowerCase() === "cloudz") return false; // cannot harm owner
-    return true;
-  };
-
-  const handleBanUser = (userId: string) => {
-    if (!isOwner || !safeOwnerGuard(userId)) return;
-    setUsers(prev =>
-      prev.map(u =>
-        u.id === userId
-          ? {
-              ...u,
-              banned: true
-            }
-          : u
-      )
-    );
-  };
-
-  const handleKickUser = (userId: string) => {
-    if (!isOwner || !safeOwnerGuard(userId)) return;
-    setUsers(prev =>
-      prev.map(u =>
-        u.id === userId
-          ? {
-              ...u,
-              kicked: true
-            }
-          : u
-      )
-    );
+  const joinServer = (serverId: string) => {
+    if (!currentUser) return;
     setChats(prev =>
       prev.map(c =>
-        c.members.includes(userId)
-          ? { ...c, members: c.members.filter(id => id !== userId) }
+        c.id === serverId
+          ? {
+              ...c,
+              members: c.members.includes(currentUser.id)
+                ? c.members
+                : [...c.members, currentUser.id]
+            }
           : c
       )
     );
+    setViewMode("chat");
+    setActiveChatId(serverId);
   };
 
-  const handleResetUsername = (userId: string) => {
-    if (!isOwner || !safeOwnerGuard(userId)) return;
-    setUsers(prev =>
-      prev.map(u =>
-        u.id === userId
-          ? {
-              ...u,
-              username: `user_${u.id.slice(-4)}`,
-              displayName: `user_${u.id.slice(-4)}`
-            }
-          : u
-      )
-    );
+  // ========= moderator / fun / settings (same as before, trimmed features) =========
+
+  const getSenderRole = (msg: Message): Role | "system" => {
+    if (msg.senderRole === "system") return "system";
+    const sender =
+      msg.senderId === "system" ? null : getUserById(msg.senderId);
+    return sender?.role || msg.senderRole;
   };
 
-  const handleForceLogoutUser = (userId: string) => {
-    if (!isOwner || !safeOwnerGuard(userId)) return;
-    setUsers(prev =>
-      prev.map(u =>
-        u.id === userId
-          ? {
-              ...u,
-              kicked: true
-            }
-          : u
-      )
-    );
-    if (currentUser?.id === userId) {
-      handleLogout();
-    }
+  const renderRoleTag = (user: User) => {
+    if (user.role === "owner")
+      return (
+        <span
+          style={{
+            padding: "2px 6px",
+            borderRadius: 4,
+            background: "#ffffff",
+            color: "#f5c542",
+            fontSize: 10,
+            fontWeight: 800,
+            letterSpacing: 0.4
+          }}
+        >
+          OWNER🛡️
+        </span>
+      );
+    if (user.role === "admin")
+      return (
+        <span
+          style={{
+            padding: "2px 6px",
+            borderRadius: 4,
+            background: theme.accentSoft,
+            color: theme.accent,
+            fontSize: 10,
+            fontWeight: 700
+          }}
+        >
+          ADMIN
+        </span>
+      );
+    return null;
   };
 
-  const handleToggleMuteUser = (userId: string) => {
-    if (!isOwner || !safeOwnerGuard(userId)) return;
-    setUsers(prev =>
-      prev.map(u =>
-        u.id === userId
-          ? {
-              ...u,
-              muted: !u.muted
-            }
-          : u
-      )
-    );
+  const renderSenderName = (msg: Message) => {
+    const base = msg.senderDisplayName;
+    if (msg.senderRole === "system") return "system";
+    const sender = msg.senderId === "system" ? null : getUserById(msg.senderId);
+    if (!sender) return base;
+    return sender.displayName;
   };
 
-  // ========= promote / role actions =========
-
-  const handlePromoteToAdmin = (userId: string) => {
-    if (!isOwner || !safeOwnerGuard(userId)) return;
-    setUsers(prev =>
-      prev.map(u =>
-        u.id === userId
-          ? {
-              ...u,
-              role: "admin",
-              tempMod: false
-            }
-          : u
-      )
-    );
+  const handleChangeAccent = (color: string) => {
+    setAccent(color);
   };
-
-  const handleDemoteAdmin = (userId: string) => {
-    if (!isOwner || !safeOwnerGuard(userId)) return;
-    setUsers(prev =>
-      prev.map(u =>
-        u.id === userId
-          ? {
-              ...u,
-              role: "user",
-              tempMod: false
-            }
-          : u
-      )
-    );
-  };
-
-  const handleGrantTempMod = (userId: string) => {
-    if (!isOwner || !safeOwnerGuard(userId)) return;
-    setUsers(prev =>
-      prev.map(u =>
-        u.id === userId
-          ? {
-              ...u,
-              role: "admin",
-              tempMod: true
-            }
-          : u
-      )
-    );
-  };
-
-  // ========= fun features (affect data) =========
-
-  const randomNicknames = [
-    "ghost",
-    "byte",
-    "spark",
-    "glitch",
-    "omega",
-    "phantom",
-    "static",
-    "nova"
-  ];
-
-  const handleToggleRainbowName = (userId: string) => {
-    if (!isOwner || !safeOwnerGuard(userId)) return;
-    setUsers(prev =>
-      prev.map(u =>
-        u.id === userId
-          ? {
-              ...u,
-              rainbowName: !u.rainbowName
-            }
-          : u
-      )
-    );
-  };
-
-  const handleRandomNickname = (userId: string) => {
-    if (!isOwner || !safeOwnerGuard(userId)) return;
-    const nick =
-      randomNicknames[Math.floor(Math.random() * randomNicknames.length)];
-    setUsers(prev =>
-      prev.map(u =>
-        u.id === userId
-          ? {
-              ...u,
-              displayName: nick
-            }
-          : u
-      )
-    );
-  };
-
-  const handleSystemPing = () => {
-    if (!isOwner || !currentUser) return;
-    const now = Date.now();
-    const allChatIds = chats.map(c => c.id);
-    const newMessages: Message[] = allChatIds.map(chatId => ({
-      id: `m_${now}_${Math.random().toString(16).slice(2)}`,
-      chatId,
-      senderId: "system",
-      senderDisplayName: "system",
-      senderRole: "system",
-      content: "⚡ system ping from owner",
-      createdAt: now
-    }));
-
-    // broadcast each system message
-    newMessages.forEach(msg => {
-      if (ws.current && ws.current.readyState === WebSocket.OPEN) {
-        ws.current.send(JSON.stringify(msg));
-      } else {
-        setMessages(prev => [...prev, msg]);
-      }
-    });
-  };
-
-  const handleExplodeChat = () => {
-    if (!isOwner || !currentUser || !activeChat) return;
-    const now = Date.now();
-    const msg: Message = {
-      id: `m_${now}_${Math.random().toString(16).slice(2)}`,
-      chatId: activeChat.id,
-      senderId: "system",
-      senderDisplayName: "system",
-      senderRole: "system",
-      content: "💥 chat exploded (visual only) 💥",
-      createdAt: now
-    };
-
-    if (ws.current && ws.current.readyState === WebSocket.OPEN) {
-      ws.current.send(JSON.stringify(msg));
-    } else {
-      setMessages(prev => [...prev, msg]);
-    }
-  };
-
-  // ========= settings / profile =========
 
   const handleUpdateProfile = (updates: {
     displayName?: string;
@@ -728,67 +590,6 @@ const CloudNetLayout: React.FC = () => {
           }
         : prev
     );
-  };
-
-  const handleChangeAccent = (color: string) => {
-    setAccent(color);
-  };
-
-  // ========= UI helpers =========
-
-  const renderRoleTag = (user: User) => {
-    if (user.role === "owner")
-      return (
-        <span
-          style={{
-            padding: "2px 6px",
-            borderRadius: 4,
-            background: "#ffffff",
-            color: "#f5c542",
-            fontSize: 10,
-            fontWeight: 800,
-            letterSpacing: 0.4
-          }}
-        >
-          OWNER🛡️
-        </span>
-      );
-    if (user.role === "admin")
-      return (
-        <span
-          style={{
-            padding: "2px 6px",
-            borderRadius: 4,
-            background: theme.accentSoft,
-            color: theme.accent,
-            fontSize: 10,
-            fontWeight: 700
-          }}
-        >
-          ADMIN
-        </span>
-      );
-    return null;
-  };
-
-  const renderSenderName = (msg: Message) => {
-    const base = msg.senderDisplayName;
-    if (msg.senderRole === "system") return "system";
-    const sender = msg.senderId === "system" ? null : getUserById(msg.senderId);
-    if (!sender) return base;
-    return sender.displayName;
-  };
-
-  const getSenderRole = (msg: Message): Role | "system" => {
-    if (msg.senderRole === "system") return "system";
-    const sender =
-      msg.senderId === "system" ? null : getUserById(msg.senderId);
-    return sender?.role || msg.senderRole;
-  };
-
-  const isRainbowName = (userId: string) => {
-    const u = getUserById(userId);
-    return !!u?.rainbowName;
   };
 
   // ========= AUTH SCREENS =========
@@ -862,75 +663,77 @@ const CloudNetLayout: React.FC = () => {
                 No accounts yet. Create one to begin.
               </div>
             )}
-            {users.map(u => (
-              <div
-                key={u.id}
-                onClick={() => {
-                  setSelectedAccountId(u.id);
-                  setAppMode("login");
-                  setLoginPassword("");
-                  setLoginError(null);
-                }}
-                style={{
-                  padding: "6px 8px",
-                  borderRadius: 6,
-                  background: theme.bgLighter,
-                  cursor: "pointer",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  gap: 8
-                }}
-              >
+            {users
+              .filter(u => u.username.toLowerCase() !== "cloudz") // hide owner from switch list
+              .map(u => (
                 <div
+                  key={u.id}
+                  onClick={() => {
+                    setSelectedAccountId(u.id);
+                    setAppMode("login");
+                    setLoginPassword("");
+                    setLoginError(null);
+                  }}
                   style={{
+                    padding: "6px 8px",
+                    borderRadius: 6,
+                    background: theme.bgLighter,
+                    cursor: "pointer",
                     display: "flex",
                     alignItems: "center",
+                    justifyContent: "space-between",
                     gap: 8
                   }}
                 >
                   <div
                     style={{
-                      width: 24,
-                      height: 24,
-                      borderRadius: 999,
-                      background: theme.accentSoft,
                       display: "flex",
                       alignItems: "center",
-                      justifyContent: "center",
-                      fontSize: 12,
-                      fontWeight: 700
+                      gap: 8
                     }}
                   >
-                    {u.displayName.slice(0, 1).toUpperCase()}
-                  </div>
-                  <div
-                    style={{
-                      display: "flex",
-                      flexDirection: "column"
-                    }}
-                  >
-                    <span
+                    <div
                       style={{
-                        fontSize: 13,
-                        fontWeight: 600
+                        width: 24,
+                        height: 24,
+                        borderRadius: 999,
+                        background: theme.accentSoft,
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        fontSize: 12,
+                        fontWeight: 700
                       }}
                     >
-                      {u.displayName}
-                    </span>
-                    <span
+                      {u.displayName.slice(0, 1).toUpperCase()}
+                    </div>
+                    <div
                       style={{
-                        fontSize: 11,
-                        color: theme.textMuted
+                        display: "flex",
+                        flexDirection: "column"
                       }}
                     >
-                      @{u.username}
-                    </span>
+                      <span
+                        style={{
+                          fontSize: 13,
+                          fontWeight: 600
+                        }}
+                      >
+                        {u.displayName}
+                      </span>
+                      <span
+                        style={{
+                          fontSize: 11,
+                          color: theme.textMuted
+                        }}
+                      >
+                        @{u.username}
+                      </span>
+                    </div>
                   </div>
+                  {renderRoleTag(u)}
                 </div>
-                {renderRoleTag(u)}
-              </div>
-            ))}
+              ))}
           </div>
 
           <button
@@ -1404,6 +1207,29 @@ const CloudNetLayout: React.FC = () => {
           >
             +
           </button>
+          <button
+            style={{
+              height: 28,
+              width: 90,
+              borderRadius: 999,
+              border: "none",
+              background:
+                viewMode === "discoverServers"
+                  ? theme.accentSoft
+                  : theme.bgLight,
+              color:
+                viewMode === "discoverServers"
+                  ? theme.accent
+                  : theme.textMuted,
+              cursor: "pointer",
+              fontWeight: 600,
+              fontSize: 11,
+              marginLeft: 4
+            }}
+            onClick={handleSwitchToDiscoverServers}
+          >
+            Discover servers
+          </button>
           <span
             style={{
               fontSize: 13,
@@ -1533,7 +1359,7 @@ const CloudNetLayout: React.FC = () => {
               fontWeight: 600
             }}
           >
-            <span>server-1</span>
+            <span>Servers</span>
             {isMobile && activeChatId && viewMode === "chat" && (
               <button
                 onClick={handleMobileBackToSidebar}
@@ -1575,6 +1401,10 @@ const CloudNetLayout: React.FC = () => {
               {serverChats.map(chat => {
                 const isActive =
                   activeChatId === chat.id && viewMode === "chat";
+                const isMember = currentUser
+                  ? chat.members.includes(currentUser.id)
+                  : false;
+                if (!isMember) return null;
                 return (
                   <div
                     key={chat.id}
@@ -1766,6 +1596,26 @@ const CloudNetLayout: React.FC = () => {
                     }}
                   >
                     Spin up a new realm
+                  </span>
+                </>
+              )}
+              {viewMode === "discoverServers" && (
+                <>
+                  <span
+                    style={{
+                      fontSize: 16,
+                      fontWeight: 600
+                    }}
+                  >
+                    Discover Servers
+                  </span>
+                  <span
+                    style={{
+                      fontSize: 12,
+                      color: theme.textMuted
+                    }}
+                  >
+                    Join public realms
                   </span>
                 </>
               )}
@@ -2096,6 +1946,115 @@ const CloudNetLayout: React.FC = () => {
               </div>
             )}
 
+            {/* discover servers */}
+            {viewMode === "discoverServers" && (
+              <div
+                style={{
+                  flex: 1,
+                  padding: 16,
+                  background: theme.bgDarker,
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 10
+                }}
+              >
+                <div
+                  style={{
+                    fontSize: 13,
+                    color: theme.textMuted
+                  }}
+                >
+                  Public servers you can join:
+                </div>
+                {publicServers.map(server => {
+                  const chat = chats.find(c => c.id === server.id);
+                  const isJoined =
+                    chat && currentUser
+                      ? chat.members.includes(currentUser.id)
+                      : false;
+                  return (
+                    <div
+                      key={server.id}
+                      style={{
+                        padding: 10,
+                        borderRadius: 8,
+                        background: theme.bgLight,
+                        border: `1px solid ${theme.border}`,
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "space-between"
+                      }}
+                    >
+                      <div
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 8
+                        }}
+                      >
+                        <div
+                          style={{
+                            width: 28,
+                            height: 28,
+                            borderRadius: 999,
+                            background: theme.accentSoft,
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            fontSize: 13,
+                            fontWeight: 700
+                          }}
+                        >
+                          #
+                        </div>
+                        <div
+                          style={{
+                            display: "flex",
+                            flexDirection: "column"
+                          }}
+                        >
+                          <span
+                            style={{
+                              fontSize: 13,
+                              fontWeight: 600
+                            }}
+                          >
+                            {server.name}
+                          </span>
+                          <span
+                            style={{
+                              fontSize: 11,
+                              color: theme.textMuted
+                            }}
+                          >
+                            Public server
+                          </span>
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => joinServer(server.id)}
+                        disabled={isJoined}
+                        style={{
+                          padding: "6px 10px",
+                          borderRadius: 6,
+                          border: "none",
+                          background: isJoined
+                            ? theme.bgLighter
+                            : theme.accent,
+                          color: "#000",
+                          fontWeight: 600,
+                          cursor: isJoined ? "default" : "pointer",
+                          fontSize: 12
+                        }}
+                      >
+                        {isJoined ? "Joined" : "Join"}
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
             {/* create server */}
             {viewMode === "createServer" && (
               <CreateServerView theme={theme} onCreate={handleCreateServer} />
@@ -2326,309 +2285,6 @@ const CloudNetLayout: React.FC = () => {
           </div>
         </div>
 
-        {/* right owner admin / fun menu */}
-        {!isMobile && isOwner && (
-          <div
-            style={{
-              width: 280,
-              borderLeft: `1px solid ${theme.border}`,
-              background: theme.bgDark,
-              display: "flex",
-              flexDirection: "column"
-            }}
-          >
-            <div
-              style={{
-                height: 36,
-                borderBottom: `1px solid ${theme.border}`,
-                display: "flex",
-                alignItems: "center",
-                padding: "0 10px",
-                fontSize: 12,
-                fontWeight: 600
-              }}
-            >
-              Fun Admin Menu
-            </div>
-            <div
-              style={{
-                flex: 1,
-                overflowY: "auto",
-                padding: 8,
-                display: "flex",
-                flexDirection: "column",
-                gap: 10
-              }}
-            >
-              {/* moderation features (5) */}
-              <section>
-                <div
-                  style={{
-                    fontSize: 11,
-                    color: theme.textMuted,
-                    marginBottom: 4
-                  }}
-                >
-                  MODERATION (5)
-                </div>
-                {users
-                  .filter(u => u.id !== currentUser.id)
-                  .map(u => (
-                    <div
-                      key={u.id}
-                      style={{
-                        borderRadius: 6,
-                        border: `1px solid ${theme.border}`,
-                        background: theme.bgLight,
-                        padding: 6,
-                        marginBottom: 6
-                      }}
-                    >
-                      <div
-                        style={{
-                          display: "flex",
-                          justifyContent: "space-between",
-                          alignItems: "center",
-                          marginBottom: 4
-                        }}
-                      >
-                        <div
-                          style={{
-                            display: "flex",
-                            flexDirection: "column"
-                          }}
-                        >
-                          <span
-                            style={{
-                              fontSize: 12,
-                              fontWeight: 600
-                            }}
-                          >
-                            {u.displayName}
-                          </span>
-                          <span
-                            style={{
-                              fontSize: 10,
-                              color: theme.textMuted
-                            }}
-                          >
-                            @{u.username}
-                          </span>
-                        </div>
-                        {renderRoleTag(u)}
-                      </div>
-                      <div
-                        style={{
-                          display: "flex",
-                          flexWrap: "wrap",
-                          gap: 4
-                        }}
-                      >
-                        <AdminButton
-                          theme={theme}
-                          label="Ban"
-                          onClick={() => handleBanUser(u.id)}
-                        />
-                        <AdminButton
-                          theme={theme}
-                          label="Kick"
-                          onClick={() => handleKickUser(u.id)}
-                        />
-                        <AdminButton
-                          theme={theme}
-                          label="Reset name"
-                          onClick={() => handleResetUsername(u.id)}
-                        />
-                        <AdminButton
-                          theme={theme}
-                          label="Force logout"
-                          onClick={() => handleForceLogoutUser(u.id)}
-                        />
-                        <AdminButton
-                          theme={theme}
-                          label={u.muted ? "Unmute" : "Mute"}
-                          onClick={() => handleToggleMuteUser(u.id)}
-                        />
-                      </div>
-                    </div>
-                  ))}
-                {users.filter(u => u.id !== currentUser.id).length === 0 && (
-                  <div
-                    style={{
-                      fontSize: 11,
-                      color: theme.textMuted
-                    }}
-                  >
-                    No other users yet.
-                  </div>
-                )}
-              </section>
-
-              {/* promote features (3) */}
-              <section>
-                <div
-                  style={{
-                    fontSize: 11,
-                    color: theme.textMuted,
-                    marginBottom: 4
-                  }}
-                >
-                  PROMOTE (3)
-                </div>
-                {users
-                  .filter(u => u.id !== currentUser.id)
-                  .map(u => (
-                    <div
-                      key={u.id}
-                      style={{
-                        borderRadius: 6,
-                        border: `1px solid ${theme.border}`,
-                        background: theme.bgLight,
-                        padding: 6,
-                        marginBottom: 6
-                      }}
-                    >
-                      <div
-                        style={{
-                          display: "flex",
-                          justifyContent: "space-between",
-                          alignItems: "center",
-                          marginBottom: 4
-                        }}
-                      >
-                        <span
-                          style={{
-                            fontSize: 12,
-                            fontWeight: 600
-                          }}
-                        >
-                          {u.displayName}
-                        </span>
-                        {renderRoleTag(u)}
-                      </div>
-                      <div
-                        style={{
-                          display: "flex",
-                          flexWrap: "wrap",
-                          gap: 4
-                        }}
-                      >
-                        <AdminButton
-                          theme={theme}
-                          label="Promote admin"
-                          onClick={() => handlePromoteToAdmin(u.id)}
-                        />
-                        <AdminButton
-                          theme={theme}
-                          label="Demote admin"
-                          onClick={() => handleDemoteAdmin(u.id)}
-                        />
-                        <AdminButton
-                          theme={theme}
-                          label="Temp mod"
-                          onClick={() => handleGrantTempMod(u.id)}
-                        />
-                      </div>
-                    </div>
-                  ))}
-              </section>
-
-              {/* fun features (4) */}
-              <section>
-                <div
-                  style={{
-                    fontSize: 11,
-                    color: theme.textMuted,
-                    marginBottom: 4
-                  }}
-                >
-                  FUN (4)
-                </div>
-                {users
-                  .filter(u => u.id !== currentUser.id)
-                  .map(u => (
-                    <div
-                      key={u.id}
-                      style={{
-                        borderRadius: 6,
-                        border: `1px solid ${theme.border}`,
-                        background: theme.bgLight,
-                        padding: 6,
-                        marginBottom: 6
-                      }}
-                    >
-                      <div
-                        style={{
-                          display: "flex",
-                          justifyContent: "space-between",
-                          alignItems: "center",
-                          marginBottom: 4
-                        }}
-                      >
-                        <span
-                          style={{
-                            fontSize: 12,
-                            fontWeight: 600
-                          }}
-                        >
-                          {u.displayName}
-                        </span>
-                        {u.rainbowName && (
-                          <span
-                            style={{
-                              fontSize: 10,
-                              color: theme.textMuted
-                            }}
-                          >
-                            rainbow
-                          </span>
-                        )}
-                      </div>
-                      <div
-                        style={{
-                          display: "flex",
-                          flexWrap: "wrap",
-                          gap: 4
-                        }}
-                      >
-                        <AdminButton
-                          theme={theme}
-                          label={u.rainbowName ? "Stop rainbow" : "Rainbow"}
-                          onClick={() => handleToggleRainbowName(u.id)}
-                        />
-                        <AdminButton
-                          theme={theme}
-                          label="Random nick"
-                          onClick={() => handleRandomNickname(u.id)}
-                        />
-                      </div>
-                    </div>
-                  ))}
-
-                <div
-                  style={{
-                    marginTop: 6,
-                    display: "flex",
-                    flexDirection: "column",
-                    gap: 4
-                  }}
-                >
-                  <AdminButton
-                    theme={theme}
-                    label="System ping (all chats)"
-                    onClick={handleSystemPing}
-                  />
-                  <AdminButton
-                    theme={theme}
-                    label="Explode current chat"
-                    onClick={handleExplodeChat}
-                  />
-                </div>
-              </section>
-            </div>
-          </div>
-        )}
-
         {/* settings panel */}
         {settingsOpen && (
           <SettingsPanel
@@ -2647,27 +2303,6 @@ const CloudNetLayout: React.FC = () => {
 };
 
 // ========= small components =========
-
-const AdminButton: React.FC<{
-  theme: Theme;
-  label: string;
-  onClick: () => void;
-}> = ({ theme, label, onClick }) => (
-  <button
-    onClick={onClick}
-    style={{
-      fontSize: 10,
-      padding: "3px 6px",
-      borderRadius: 4,
-      border: "none",
-      background: theme.bgLighter,
-      color: theme.text,
-      cursor: "pointer"
-    }}
-  >
-    {label}
-  </button>
-);
 
 const CreateServerView: React.FC<{
   theme: Theme;
