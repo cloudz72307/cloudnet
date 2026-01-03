@@ -1,0 +1,32 @@
+# --- Build stage ---
+FROM node:22-alpine AS builder
+WORKDIR /app
+
+# Install pnpm globally (faster + better workspace support)
+RUN npm install -g pnpm
+
+# Copy everything
+COPY . .
+
+# Install dependencies for all workspaces
+RUN pnpm install
+
+# Build API + Web
+RUN pnpm --filter cloudnet-api build
+RUN pnpm --filter cloudnet-web build
+
+# --- Runtime stage ---
+FROM node:22-alpine AS runner
+WORKDIR /app
+
+# Install pnpm again
+RUN npm install -g pnpm
+
+# Copy built output + package files
+COPY --from=builder /app .
+
+# Expose port
+EXPOSE 3000
+
+# Start the API (which also serves the web build)
+CMD ["npm", "start"]
