@@ -1,15 +1,20 @@
-const API_BASE = "";
+import { Chat, Message, User, Friend, AuthResponse } from "./types";
+
+const API_BASE = ""; // same origin (Render serves API + web)
 
 function getToken(): string | null {
   return localStorage.getItem("cloudnet_token");
 }
 
-function setToken(token: string | null) {
+export function setToken(token: string | null) {
   if (token) localStorage.setItem("cloudnet_token", token);
   else localStorage.removeItem("cloudnet_token");
 }
 
-async function request(path: string, options: RequestInit = {}) {
+async function request<T = any>(
+  path: string,
+  options: RequestInit = {}
+): Promise<T> {
   const token = getToken();
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -31,55 +36,72 @@ async function request(path: string, options: RequestInit = {}) {
     }
     throw err;
   }
+
   return res.json();
 }
 
 export const api = {
-  setToken,
-  async register(username: string, password: string) {
-    const data = await request("/auth/register", {
+  async register(username: string, password: string): Promise<AuthResponse> {
+    return request<AuthResponse>("/auth/register", {
       method: "POST",
       body: JSON.stringify({ username, password })
     });
-    api.setToken(data.token);
-    return data.user;
   },
-  async login(username: string, password: string) {
-    const data = await request("/auth/login", {
+
+  async login(username: string, password: string): Promise<AuthResponse> {
+    return request<AuthResponse>("/auth/login", {
       method: "POST",
       body: JSON.stringify({ username, password })
     });
-    api.setToken(data.token);
-    return data.user;
   },
-  async me() {
-    return request("/auth/me");
+
+  async me(): Promise<{ user: User }> {
+    return request<{ user: User }>("/auth/me");
   },
-  async getFriends() {
-    return request("/friends");
+
+  async getFriends(): Promise<{ friends: Friend[] }> {
+    return request<{ friends: Friend[] }>("/friends");
   },
-  async getChats() {
-    return request("/chats");
-  },
-  async getMessages(chatId: string) {
-    return request(`/chats/${chatId}/messages`);
-  },
-  async sendMessage(chatId: string, content: string) {
-    return request(`/chats/${chatId}/send`, {
-      method: "POST",
-      body: JSON.stringify({ content })
-    });
-  },
-  async openDM(username: string) {
-    return request("/dms/open", {
+
+  async addFriend(username: string): Promise<{ ok: boolean }> {
+    return request<{ ok: boolean }>("/friends/add", {
       method: "POST",
       body: JSON.stringify({ username })
     });
   },
-  async createGC(name: string, memberUsernames: string[]) {
-    return request("/gcs/create", {
+
+  async getChats(): Promise<{ chats: Chat[] }> {
+    return request<{ chats: Chat[] }>("/chats");
+  },
+
+  async getMessages(chatId: string): Promise<{ messages: Message[] }> {
+    return request<{ messages: Message[] }>(`/chats/${chatId}/messages`);
+  },
+
+  async sendMessage(
+    chatId: string,
+    content: string
+  ): Promise<{ message: Message }> {
+    return request<{ message: Message }>(`/chats/${chatId}/send`, {
       method: "POST",
-      body: JSON.stringify({ name, memberUsernames })
+      body: JSON.stringify({ content })
+    });
+  },
+
+  async openDM(username: string): Promise<{ chat: Chat }> {
+    return request<{ chat: Chat }>("/dms/open", {
+      method: "POST",
+      body: JSON.stringify({ username })
+    });
+  },
+
+  async createGC(
+    name: string,
+    memberUsernames: string[]
+  ): Promise<{ chat: Chat }> {
+    return request<{ chat: Chat }>("/gcs/create", {
+      method: "POST",
+      body: JSON.stringify({ name, members: memberUsernames })
     });
   }
 };
