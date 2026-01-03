@@ -1,84 +1,79 @@
-import React, { useEffect, useState } from "react";
-import { api } from "./api";
-import { io, Socket } from "socket.io-client";
+import React, { useEffect, useMemo, useState } from "react";
+import { api, setToken } from "./api";
+import { getSocket, joinChat, leaveChat, sendSocketMessage } from "./socket";
+import { Chat, Friend, Message, User } from "./types";
 
-type User = { id: string; username: string };
-type Chat = { id: string; type: "channel" | "dm" | "gc"; name: string };
-type Message = {
-  id: string;
-  chatId: string;
-  senderId: string;
-  senderUsername: string;
-  content: string;
-  createdAt: string;
+const theme = {
+  bg: "#1e1f22",
+  bgLight: "#2b2d31",
+  bgDark: "#1a1b1e",
+  bgChat: "#313338",
+  text: "#f2f3f5",
+  textMuted: "#b5bac1",
+  accent: "#00c8ff",
+  accentSoft: "rgba(0, 200, 255, 0.18)",
+  border: "rgba(255,255,255,0.06)"
 };
 
-const socketUrl = ""; // same origin
+type PresenceEntry = { id: string; label: string };
 
-export const CloudNetApp: React.FC = () => {
-  const [socket, setSocket] = useState<Socket | null>(null);
-
+export const CloudNetLayout: React.FC = () => {
   const [user, setUser] = useState<User | null>(null);
   const [authChecked, setAuthChecked] = useState(false);
 
-  const [chats, setChats] = useState<Chat[]>([]);
-  const [currentChatId, setCurrentChatId] = useState<string | null>(null);
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [messageInput, setMessageInput] = useState("");
-
-  const [friends, setFriends] = useState<User[]>([]);
-
-  const [loginMode, setLoginMode] = useState<"login" | "register">("login");
-  const [loginUsername, setLoginUsername] = useState("");
-  const [loginPassword, setLoginPassword] = useState("");
+  const [authMode, setAuthMode] = useState<"login" | "register">("login");
+  const [authUsername, setAuthUsername] = useState("");
+  const [authPassword, setAuthPassword] = useState("");
   const [rememberMe, setRememberMe] = useState(true);
   const [authError, setAuthError] = useState<string | null>(null);
 
-  // Check existing token on load
+  const [chats, setChats] = useState<Chat[]>([]);
+  const [activeChatId, setActiveChatId] = useState<string | null>(null);
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [friends, setFriends] = useState<Friend[]>([]);
+  const [inputValue, setInputValue] = useState("");
+
+  const [showCloudZai, setShowCloudZai] = useState<boolean>(true);
+  const [showConsole, setShowConsole] = useState<boolean>(true);
+
+  const [presenceLines, setPresenceLines] = useState<PresenceEntry[]>([]);
+
+  // Initial auth check
   useEffect(() => {
     (async () => {
       try {
-        const data = await api.me();
-        setUser(data.user);
+        const res = await api.me();
+        setUser(res.user);
       } catch {
-        // ignore
+        // no token or invalid → stay logged out
       } finally {
         setAuthChecked(true);
       }
     })();
   }, []);
 
-  // Connect socket once logged in
+  // After login: init socket, load chats + friends
   useEffect(() => {
     if (!user) return;
 
-    const s = io(socketUrl, {
-      transports: ["websocket"]
-    });
+    const socket = getSocket({
+      onMessage: (msg) => {
+        // only append if it's for the active chat
+        setMessages((prev) =>
+          prev.length && prev[0].chatId === msg.chatId
+            ? [...prev, msg]
+            : prev
+        );
 
-    const token = localStorage.getItem("cloudnet_token");
-    s.on("connect", () => {
-      if (token) {
-        s.emit("auth", { token });
+        // fake presence log for now
+        const label = `[message] ${msg.chatId}: ${msg.content.slice(0, 24)}`;
+        setPresenceLines((prev) => [
+          { id: `${Date.now()}-${Math.random()}`, label },
+          ...prev
+        ]);
       }
     });
 
-    s.on("message", (msg: Message) => {
-      setMessages(prev =>
-        prev[0]?.chatId === msg.chatId ? [...prev, msg] : prev
-      );
-    });
-
-    setSocket(s);
-
-    return () => {
-      s.disconnect();
-    };
-  }, [user]);
-
-  // Load initial data once user is loaded
-  useEffect(() => {
-    if (!user) return;
     (async () => {
       const [friendsRes, chatsRes] = await Promise.all([
         api.getFriends(),
@@ -87,104 +82,129 @@ export const CloudNetApp: React.FC = () => {
       setFriends(friendsRes.friends);
       setChats(chatsRes.chats);
 
-      const general = chatsRes.chats.find((c: Chat) => c.id === "channel:general") || chatsRes.chats[0];
-      if (general) {
-        setCurrentChatId(general.id);
-      }
-    })();
-  }, [user]);
-
-  // Load messages when chat changes
-  useEffect(() => {
-    if (!currentChatId || !user) return;
-    (async () => {
-      const res = await api.getMessages(currentChatId);
-      setMessages(res.messages);
-      socket?.emit("join_chat", { chatId: currentChatId });
+      const general =
+        chatsRes.chats.find((c) => c.id === "channel:general") ||
+        chatsRes.chats[0] ||
+        null;
+      if (general) setActiveChatId(general.id);
     })();
 
     return () => {
-      if (currentChatId) {
-        socket?.emit("leave_chat", { chatId: currentChatId });
-      }
+      socket.disconnect();
     };
-  }, [currentChatId, user, socket]);
+  }, [user]);
+
+  // When active chat changes: load messages, join socket room
+  useEffect(() => {
+    if (!user || !activeChatId) return;
+
+    let cancelled = false;
+
+    (async () => {
+      const res = await api.getMessages(activeChatId);
+      if (!cancelled) setMessages(res.messages);
+      joinChat(activeChatId);
+    })();
+
+    return () => {
+      cancelled = true;
+      leaveChat(activeChatId);
+    };
+  }, [user, activeChatId]);
 
   async function handleAuthSubmit(e: React.FormEvent) {
     e.preventDefault();
     setAuthError(null);
     try {
-      let u: User;
-      if (loginMode === "login") {
-        u = await api.login(loginUsername, loginPassword);
-      } else {
-        u = await api.register(loginUsername, loginPassword);
+      const username = authUsername.trim();
+      const password = authPassword.trim();
+      if (!username || !password) {
+        setAuthError("Username and password required");
+        return;
       }
+
+      const res =
+        authMode === "login"
+          ? await api.login(username, password)
+          : await api.register(username, password);
 
       if (!rememberMe) {
-        // for now we still store token, but you could change api.setToken behavior
+        // still using localStorage now; you could later switch to memory/session
       }
 
-      setUser(u);
+      setToken(res.token);
+      setUser(res.user);
     } catch (err: any) {
       setAuthError(err?.error || "auth_failed");
     }
   }
 
-  async function handleSendMessage(e: React.FormEvent) {
+  async function handleSend(e: React.FormEvent) {
     e.preventDefault();
-    if (!currentChatId || !messageInput.trim()) return;
-    const content = messageInput.trim();
-    setMessageInput("");
-    await api.sendMessage(currentChatId, content);
+    if (!activeChatId || !inputValue.trim()) return;
+    const content = inputValue.trim();
+    setInputValue("");
+    // Send via HTTP so DB stays authoritative
+    await api.sendMessage(activeChatId, content);
+    // Socket will deliver message back and append in listener
   }
 
+  const activeChat = useMemo(
+    () => chats.find((c) => c.id === activeChatId) || null,
+    [chats, activeChatId]
+  );
+
   if (!authChecked) {
-    return <div style={rootStyle}>Loading...</div>;
+    return (
+      <div style={rootCentered}>
+        <div>Loading...</div>
+      </div>
+    );
   }
 
   if (!user) {
     return (
-      <div style={rootStyle}>
-        <div style={loginCardStyle}>
-          <h2 style={{ marginBottom: 8 }}>CloudNET</h2>
-          <p style={{ marginTop: 0, marginBottom: 16 }}>Sign in to continue</p>
-          <form onSubmit={handleAuthSubmit} style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      <div style={rootCentered}>
+        <div style={authCard}>
+          <div style={authTitle}>CloudNET</div>
+          <div style={authSubtitle}>Sign in to your Cloud</div>
+          <form onSubmit={handleAuthSubmit} style={authForm}>
             <input
-              style={inputStyle}
+              style={authInput}
               placeholder="Username"
-              value={loginUsername}
-              onChange={(e) => setLoginUsername(e.target.value)}
+              value={authUsername}
+              onChange={(e) => setAuthUsername(e.target.value)}
             />
             <input
-              style={inputStyle}
-              placeholder="Password"
+              style={authInput}
               type="password"
-              value={loginPassword}
-              onChange={(e) => setLoginPassword(e.target.value)}
+              placeholder="Password"
+              value={authPassword}
+              onChange={(e) => setAuthPassword(e.target.value)}
             />
-            <label style={{ fontSize: 12, display: "flex", alignItems: "center", gap: 6 }}>
+            <label style={authRememberRow}>
               <input
                 type="checkbox"
                 checked={rememberMe}
                 onChange={(e) => setRememberMe(e.target.checked)}
+                style={{ marginRight: 6 }}
               />
-              Remember Me
+              <span>Remember Me</span>
             </label>
             {authError && (
-              <div style={{ color: "#ff5c5c", fontSize: 12 }}>{authError}</div>
+              <div style={authErrorStyle}>{authError}</div>
             )}
-            <button type="submit" style={buttonStyle}>
-              {loginMode === "login" ? "Login" : "Create Account"}
+            <button type="submit" style={authButton}>
+              {authMode === "login" ? "Login" : "Create account"}
             </button>
           </form>
-          <div style={{ marginTop: 12, fontSize: 12, textAlign: "center" }}>
-            {loginMode === "login" ? (
+          <div style={authFooter}>
+            {authMode === "login" ? (
               <>
                 No account?{" "}
                 <span
-                  style={linkStyle}
-                  onClick={() => setLoginMode("register")}
+                  style={authLink}
+                  onClick={() => setAuthMode("register")}
                 >
                   Create one
                 </span>
@@ -193,8 +213,8 @@ export const CloudNetApp: React.FC = () => {
               <>
                 Already have an account?{" "}
                 <span
-                  style={linkStyle}
-                  onClick={() => setLoginMode("login")}
+                  style={authLink}
+                  onClick={() => setAuthMode("login")}
                 >
                   Login
                 </span>
@@ -206,218 +226,637 @@ export const CloudNetApp: React.FC = () => {
     );
   }
 
-  const currentChat = chats.find(c => c.id === currentChatId) || null;
-
   return (
-    <div style={rootStyle}>
-      {/* LEFT SIDEBAR */}
-      <div style={sidebarStyle}>
-        <div style={profileSectionStyle}>
-          <div style={{ fontSize: 14, fontWeight: 600 }}>{user.username}</div>
-          <div style={{ fontSize: 11, opacity: 0.7 }}>Online</div>
+    <div style={root}>
+      {/* SERVER DOCK */}
+      <div style={serverDock}>
+        <div style={dockLogo}>C</div>
+        <DockItem label="server-1" active />
+        <DockItem label="+" />
+      </div>
+
+      {/* CHANNEL NAV */}
+      <div style={channelNav}>
+        <div style={channelNavHeader}>
+          <div style={serverName}>server-1</div>
         </div>
 
-        <div style={sidebarSectionStyle}>
-          <div style={sidebarSectionTitleStyle}>Friends</div>
-          {friends.map((f) => (
-            <div key={f.id} style={sidebarItemStyle}>
-              {f.username}
-            </div>
-          ))}
+        <div style={channelList}>
+          <section style={sectionBlock}>
+            <div style={sectionTitle}>TEXT CHANNELS</div>
+            {chats
+              .filter((c) => c.type === "channel")
+              .map((c) => (
+                <ChannelItem
+                  key={c.id}
+                  label={`#${c.name || "channel"}`}
+                  active={c.id === activeChatId}
+                  onClick={() => setActiveChatId(c.id)}
+                />
+              ))}
+          </section>
+
+          <section style={sectionBlock}>
+            <div style={sectionTitle}>DIRECT MESSAGES</div>
+            {chats
+              .filter((c) => c.type === "dm")
+              .map((c) => (
+                <ChannelItem
+                  key={c.id}
+                  label={c.name || "DM"}
+                  active={c.id === activeChatId}
+                  onClick={() => setActiveChatId(c.id)}
+                />
+              ))}
+          </section>
+
+          <section style={sectionBlock}>
+            <div style={sectionTitle}>GROUP CHATS</div>
+            {chats
+              .filter((c) => c.type === "gc")
+              .map((c) => (
+                <ChannelItem
+                  key={c.id}
+                  label={c.name || "Group"}
+                  active={c.id === activeChatId}
+                  onClick={() => setActiveChatId(c.id)}
+                />
+              ))}
+          </section>
+
+          <section style={sectionBlock}>
+            <div style={sectionTitle}>FRIENDS</div>
+            {friends.map((f) => (
+              <div key={f.id} style={friendRow}>
+                <div style={friendAvatar}>
+                  {f.username.slice(0, 2).toUpperCase()}
+                </div>
+                <div style={friendName}>{f.username}</div>
+              </div>
+            ))}
+          </section>
         </div>
 
-        <div style={sidebarSectionStyle}>
-          <div style={sidebarSectionTitleStyle}>Chats</div>
-          {chats.map((chat) => (
-            <div
-              key={chat.id}
-              style={{
-                ...sidebarItemStyle,
-                background:
-                  chat.id === currentChatId ? "rgba(0, 200, 255, 0.16)" : "transparent"
-              }}
-              onClick={() => setCurrentChatId(chat.id)}
-            >
-              {chat.type === "channel" ? chat.name : chat.name}
+        <div style={channelFooter}>
+          <div style={userTag}>
+            <div style={userAvatar}>
+              {user.username.slice(0, 1).toUpperCase()}
             </div>
-          ))}
+            <div style={userInfo}>
+              <div style={userName}>{user.username}</div>
+              <div style={userSub}>online</div>
+            </div>
+          </div>
         </div>
       </div>
 
-      {/* MAIN CHAT AREA */}
-      <div style={mainAreaStyle}>
-        <div style={chatHeaderStyle}>
-          <div style={{ fontSize: 14, fontWeight: 600 }}>
-            {currentChat ? currentChat.name : "Select a chat"}
+      {/* MAIN COLUMN */}
+      <div style={mainColumn}>
+        {/* TOP BAR */}
+        <div style={topBar}>
+          <div style={topBarLeft}>
+            <span style={hash}>#</span>
+            <span style={topChannelName}>
+              {activeChat
+                ? activeChat.name || activeChat.id
+                : "Select a chat"}
+            </span>
+          </div>
+          <div style={topBarRight}>
+            <button
+              style={topButton}
+              onClick={() => setShowCloudZai((v) => !v)}
+            >
+              CloudZAI {showCloudZai ? "▾" : "▸"}
+            </button>
+            <button
+              style={topButton}
+              onClick={() => setShowConsole((v) => !v)}
+            >
+              Console {showConsole ? "▾" : "▸"}
+            </button>
           </div>
         </div>
 
-        <div style={messagesContainerStyle}>
-          {messages.map((m) => (
-            <div key={m.id} style={messageRowStyle}>
-              <div style={messageAuthorStyle}>{m.senderUsername}</div>
-              <div style={messageBubbleStyle}>{m.content}</div>
+        {/* CHAT CORE */}
+        <div style={chatCore}>
+          <div style={messagesPane} className="messages-pane">
+            {messages.map((m) => (
+              <div key={m.id} style={messageRow}>
+                <div style={messageHeader}>
+                  <span style={messageAuthor}>
+                    {m.senderId === user.id ? "you" : m.senderId}
+                  </span>
+                  <span style={messageTimestamp}>
+                    {new Date(m.createdAt).toLocaleTimeString()}
+                  </span>
+                </div>
+                <div style={messageBubble}>{m.content}</div>
+              </div>
+            ))}
+          </div>
+          <form style={inputBar} onSubmit={handleSend}>
+            <input
+              style={input}
+              placeholder={
+                activeChat
+                  ? `Message ${
+                      activeChat.type === "channel"
+                        ? `#${activeChat.name || "channel"}`
+                        : activeChat.name || "chat"
+                    }`
+                  : "Select a chat"
+              }
+              value={inputValue}
+              onChange={(e) => setInputValue(e.target.value)}
+              disabled={!activeChat}
+            />
+          </form>
+          {showConsole && (
+            <div style={consoleBar} className="console-bar">
+              <div style={consoleHeader}>System Console</div>
+              <div style={consoleBody}>
+                {presenceLines.map((p) => (
+                  <div key={p.id} style={consoleLine}>
+                    {p.label}
+                  </div>
+                ))}
+              </div>
             </div>
-          ))}
+          )}
         </div>
-
-        <form onSubmit={handleSendMessage} style={inputBarStyle}>
-          <input
-            style={chatInputStyle}
-            placeholder="Type a message..."
-            value={messageInput}
-            onChange={(e) => setMessageInput(e.target.value)}
-          />
-        </form>
       </div>
+
+      {/* CLOUDZAI PANEL */}
+      {showCloudZai && (
+        <div style={cloudZaiPanel} className="cloudzai-panel">
+          <div style={cloudZaiHeader}>
+            <div>
+              <div style={cloudZaiTitle}>CloudZAI</div>
+              <div style={cloudZaiSubtitle}>Ambient insight layer</div>
+            </div>
+          </div>
+          <div style={cloudZaiBody}>
+            <p style={cloudZaiText}>
+              CloudZAI will skim this channel and surface highlights, patterns,
+              and anomalies in real time.
+            </p>
+            <p style={cloudZaiText}>
+              As you wire it further, it can observe message rate, keywords, or
+              user events and react with subtle commentary.
+            </p>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
 
-// --- styles (inline for now, we can executor-ify later) ---
+// Dock item
+const DockItem: React.FC<{ label: string; active?: boolean }> = ({
+  label,
+  active
+}) => {
+  return (
+    <div
+      style={{
+        ...dockItem,
+        backgroundColor: active ? theme.accentSoft : "transparent",
+        borderRadius: 16
+      }}
+    >
+      <span>{label[0]}</span>
+    </div>
+  );
+};
 
-const rootStyle: React.CSSProperties = {
+// Channel item
+const ChannelItem: React.FC<{
+  label: string;
+  active?: boolean;
+  onClick: () => void;
+}> = ({ label, active, onClick }) => {
+  return (
+    <div
+      style={{
+        ...channelItem,
+        backgroundColor: active ? theme.accentSoft : "transparent",
+        color: active ? theme.text : theme.textMuted
+      }}
+      onClick={onClick}
+    >
+      <span>{label}</span>
+    </div>
+  );
+};
+
+// --- Styles (same as before, kept clean/non-plasticy) ---
+
+const root: React.CSSProperties = {
+  display: "flex",
   height: "100vh",
   width: "100vw",
-  display: "flex",
-  background: "#050811",
-  color: "#f5f8ff",
-  fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, sans-serif"
+  background: theme.bg,
+  color: theme.text,
+  fontFamily:
+    'system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif',
+  overflow: "hidden"
 };
 
-const sidebarStyle: React.CSSProperties = {
-  width: 220,
-  borderRight: "1px solid rgba(255,255,255,0.06)",
+const rootCentered: React.CSSProperties = {
+  ...root,
+  alignItems: "center",
+  justifyContent: "center"
+};
+
+const serverDock: React.CSSProperties = {
+  width: 72,
+  background: theme.bgDark,
   display: "flex",
   flexDirection: "column",
-  padding: 10,
-  boxSizing: "border-box",
-  background: "radial-gradient(circle at top left, #0b1020 0%, #050811 60%)"
+  alignItems: "center",
+  paddingTop: 12,
+  gap: 10,
+  borderRight: `1px solid ${theme.border}`
 };
 
-const profileSectionStyle: React.CSSProperties = {
-  padding: 10,
-  borderRadius: 8,
-  background: "rgba(0,0,0,0.35)",
-  marginBottom: 12
+const dockLogo: React.CSSProperties = {
+  width: 40,
+  height: 40,
+  borderRadius: 20,
+  background: theme.accentSoft,
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  fontWeight: 700
 };
 
-const sidebarSectionStyle: React.CSSProperties = {
-  marginBottom: 12
+const dockItem: React.CSSProperties = {
+  width: 40,
+  height: 40,
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  color: theme.text,
+  fontSize: 18,
+  cursor: "pointer",
+  transition: "background 0.15s ease"
 };
 
-const sidebarSectionTitleStyle: React.CSSProperties = {
+const channelNav: React.CSSProperties = {
+  width: 260,
+  background: theme.bgLight,
+  display: "flex",
+  flexDirection: "column",
+  borderRight: `1px solid ${theme.border}`
+};
+
+const channelNavHeader: React.CSSProperties = {
+  height: 48,
+  display: "flex",
+  alignItems: "center",
+  padding: "0 12px",
+  borderBottom: `1px solid ${theme.border}`,
+  fontWeight: 600,
+  fontSize: 14
+};
+
+const serverName: React.CSSProperties = {
+  color: theme.text
+};
+
+const channelList: React.CSSProperties = {
+  flex: 1,
+  overflowY: "auto",
+  padding: "8px 8px 8px 8px"
+};
+
+const sectionBlock: React.CSSProperties = {
+  marginBottom: 16
+};
+
+const sectionTitle: React.CSSProperties = {
   fontSize: 11,
-  textTransform: "uppercase",
-  letterSpacing: 0.08,
-  opacity: 0.6,
+  color: theme.textMuted,
+  letterSpacing: 0.5,
   marginBottom: 6
 };
 
-const sidebarItemStyle: React.CSSProperties = {
-  fontSize: 13,
-  padding: "6px 8px",
-  borderRadius: 6,
-  cursor: "pointer",
-  marginBottom: 2,
-  transition: "background 0.12s ease",
-};
-
-const mainAreaStyle: React.CSSProperties = {
-  flex: 1,
-  display: "flex",
-  flexDirection: "column"
-};
-
-const chatHeaderStyle: React.CSSProperties = {
-  height: 44,
+const channelItem: React.CSSProperties = {
   display: "flex",
   alignItems: "center",
-  padding: "0 14px",
-  borderBottom: "1px solid rgba(255,255,255,0.06)",
-  background: "rgba(0,0,0,0.45)"
-};
-
-const messagesContainerStyle: React.CSSProperties = {
-  flex: 1,
-  overflowY: "auto",
-  padding: "10px 12px",
-  display: "flex",
-  flexDirection: "column",
-  gap: 6
-};
-
-const messageRowStyle: React.CSSProperties = {
-  display: "flex",
-  flexDirection: "column",
-  maxWidth: "70%"
-};
-
-const messageAuthorStyle: React.CSSProperties = {
-  fontSize: 11,
-  opacity: 0.65,
+  padding: "4px 8px",
+  borderRadius: 6,
+  fontSize: 14,
+  cursor: "pointer",
   marginBottom: 2
 };
 
-const messageBubbleStyle: React.CSSProperties = {
-  background: "rgba(0, 200, 255, 0.14)",
-  borderRadius: 10,
-  padding: "6px 10px",
-  fontSize: 13
-};
-
-const inputBarStyle: React.CSSProperties = {
-  height: 50,
-  padding: "8px 10px",
-  borderTop: "1px solid rgba(255,255,255,0.06)",
+const channelFooter: React.CSSProperties = {
+  height: 52,
+  borderTop: `1px solid ${theme.border}`,
+  padding: "0 8px",
   display: "flex",
   alignItems: "center"
 };
 
-const chatInputStyle: React.CSSProperties = {
-  width: "100%",
-  borderRadius: 999,
-  border: "none",
-  outline: "none",
-  fontSize: 13,
-  padding: "8px 12px",
-  background: "rgba(5,10,25,0.9)",
-  color: "#f5f8ff"
+const userTag: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 8,
+  width: "100%"
 };
 
-const loginCardStyle: React.CSSProperties = {
+const userAvatar: React.CSSProperties = {
+  width: 28,
+  height: 28,
+  borderRadius: 999,
+  background: theme.bgDark,
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  fontSize: 13,
+  color: theme.textMuted
+};
+
+const userInfo: React.CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  fontSize: 12
+};
+
+const userName: React.CSSProperties = {
+  color: theme.text
+};
+
+const userSub: React.CSSProperties = {
+  color: theme.textMuted,
+  fontSize: 11
+};
+
+const mainColumn: React.CSSProperties = {
+  flex: 1,
+  display: "flex",
+  flexDirection: "column",
+  minWidth: 0
+};
+
+const topBar: React.CSSProperties = {
+  height: 48,
+  background: theme.bgDark,
+  borderBottom: `1px solid ${theme.border}`,
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  padding: "0 12px"
+};
+
+const topBarLeft: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 6
+};
+
+const hash: React.CSSProperties = {
+  fontSize: 18,
+  color: theme.textMuted
+};
+
+const topChannelName: React.CSSProperties = {
+  fontSize: 15,
+  fontWeight: 600
+};
+
+const topBarRight: React.CSSProperties = {
+  display: "flex",
+  gap: 8
+};
+
+const topButton: React.CSSProperties = {
+  background: theme.bgLight,
+  border: `1px solid ${theme.border}`,
+  borderRadius: 6,
+  padding: "4px 8px",
+  fontSize: 12,
+  color: theme.textMuted,
+  cursor: "pointer"
+};
+
+const chatCore: React.CSSProperties = {
+  flex: 1,
+  display: "flex",
+  flexDirection: "column",
+  background: theme.bgChat,
+  position: "relative"
+};
+
+const messagesPane: React.CSSProperties = {
+  flex: 1,
+  padding: "12px 16px",
+  overflowY: "auto",
+  display: "flex",
+  flexDirection: "column",
+  gap: 8
+};
+
+const messageRow: React.CSSProperties = {
+  display: "flex",
+  flexDirection: "column"
+};
+
+const messageHeader: React.CSSProperties = {
+  display: "flex",
+  alignItems: "baseline",
+  gap: 6,
+  fontSize: 12
+};
+
+const messageAuthor: React.CSSProperties = {
+  fontWeight: 600
+};
+
+const messageTimestamp: React.CSSProperties = {
+  fontSize: 11,
+  color: theme.textMuted
+};
+
+const messageBubble: React.CSSProperties = {
+  marginTop: 2,
+  background: theme.bgLight,
+  borderRadius: 8,
+  padding: "6px 10px",
+  fontSize: 14
+};
+
+const inputBar: React.CSSProperties = {
+  padding: "8px 12px",
+  borderTop: `1px solid ${theme.border}`,
+  background: theme.bgDark
+};
+
+const input: React.CSSProperties = {
+  width: "100%",
+  borderRadius: 8,
+  border: "none",
+  outline: "none",
+  padding: "8px 10px",
+  background: theme.bgLight,
+  color: theme.text,
+  fontSize: 14
+};
+
+const consoleBar: React.CSSProperties = {
+  borderTop: `1px solid ${theme.border}`,
+  background: theme.bgDark,
+  height: 120,
+  display: "flex",
+  flexDirection: "column"
+};
+
+const consoleHeader: React.CSSProperties = {
+  fontSize: 12,
+  color: theme.textMuted,
+  padding: "4px 10px"
+};
+
+const consoleBody: React.CSSProperties = {
+  flex: 1,
+  padding: "0 10px 6px 10px",
+  overflowY: "auto",
+  fontSize: 12
+};
+
+const consoleLine: React.CSSProperties = {
+  color: theme.textMuted
+};
+
+const cloudZaiPanel: React.CSSProperties = {
+  width: 280,
+  background: theme.bgLight,
+  borderLeft: `1px solid ${theme.border}`,
+  display: "flex",
+  flexDirection: "column"
+};
+
+const cloudZaiHeader: React.CSSProperties = {
+  padding: "10px 12px",
+  borderBottom: `1px solid ${theme.border}`,
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between"
+};
+
+const cloudZaiTitle: React.CSSProperties = {
+  fontSize: 14,
+  fontWeight: 600
+};
+
+const cloudZaiSubtitle: React.CSSProperties = {
+  fontSize: 12,
+  color: theme.textMuted
+};
+
+const cloudZaiBody: React.CSSProperties = {
+  padding: "10px 12px",
+  fontSize: 13,
+  color: theme.textMuted
+};
+
+const cloudZaiText: React.CSSProperties = {
+  marginBottom: 8
+};
+
+const authCard: React.CSSProperties = {
   width: 320,
   padding: 20,
   borderRadius: 12,
-  background: "radial-gradient(circle at top, #101629 0%, #050811 60%)",
-  border: "1px solid rgba(0, 200, 255, 0.2)",
-  boxShadow: "0 0 32px rgba(0,0,0,0.75)"
+  background: theme.bgDark,
+  border: `1px solid ${theme.border}`
 };
 
-const inputStyle: React.CSSProperties = {
-  borderRadius: 8,
-  border: "1px solid rgba(255,255,255,0.12)",
+const authTitle: React.CSSProperties = {
+  fontSize: 18,
+  fontWeight: 700,
+  marginBottom: 4
+};
+
+const authSubtitle: React.CSSProperties = {
+  fontSize: 13,
+  color: theme.textMuted,
+  marginBottom: 16
+};
+
+const authForm: React.CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 8
+};
+
+const authInput: React.CSSProperties = {
+  borderRadius: 6,
+  border: `1px solid ${theme.border}`,
   padding: "8px 10px",
   fontSize: 13,
-  background: "rgba(5,10,25,0.9)",
-  color: "#f5f8ff",
-  outline: "none"
+  background: theme.bg,
+  color: theme.text
 };
 
-const buttonStyle: React.CSSProperties = {
+const authRememberRow: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  fontSize: 12,
+  color: theme.textMuted
+};
+
+const authButton: React.CSSProperties = {
   marginTop: 4,
-  borderRadius: 999,
+  borderRadius: 6,
   border: "none",
-  background: "linear-gradient(90deg, #00c8ff, #4df2ff)",
-  color: "#050811",
+  background: theme.accent,
+  color: theme.bgDark,
   fontWeight: 600,
   fontSize: 13,
   padding: "8px 10px",
   cursor: "pointer"
 };
 
-const linkStyle: React.CSSProperties = {
-  color: "#4df2ff",
+const authFooter: React.CSSProperties = {
+  marginTop: 12,
+  fontSize: 12,
+  color: theme.textMuted
+};
+
+const authLink: React.CSSProperties = {
+  color: theme.accent,
   cursor: "pointer",
   textDecoration: "underline"
+};
+
+const authErrorStyle: React.CSSProperties = {
+  color: "#ff5c5c",
+  fontSize: 12
+};
+
+const friendRow: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 8,
+  fontSize: 13,
+  marginBottom: 4
+};
+
+const friendAvatar: React.CSSProperties = {
+  width: 20,
+  height: 20,
+  borderRadius: 999,
+  background: theme.bgDark,
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  fontSize: 11,
+  color: theme.textMuted
+};
+
+const friendName: React.CSSProperties = {
+  color: theme.text
 };
