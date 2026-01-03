@@ -1,0 +1,14 @@
+{
+  "name": "cloudnet",
+  "private": true,
+  "scripts": {
+    "dev:web": "npm --prefix apps/web run dev",
+    "dev:api": "npm --prefix apps/api run dev",
+    "dev": "npx concurrently \"npm run dev:api\" \"npm run dev:web\"",
+    "build": "npm --prefix apps/api run build && npm --prefix apps/web run build",
+    "start": "node apps/api/dist/index.js"
+  },
+  "devDependencies": {
+    "concurrently": "^9.0.0"
+  }
+}
