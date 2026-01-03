@@ -8,7 +8,7 @@ RUN npm install -g pnpm
 # Copy everything
 COPY . .
 
-# Install root deps (concurrently)
+# Install root deps
 RUN pnpm install
 
 # Install API deps + build
@@ -28,11 +28,14 @@ WORKDIR /app
 # Install pnpm
 RUN npm install -g pnpm
 
-# Copy built output
+# Copy built output from builder
 COPY --from=builder /app .
+
+# Environment
+ENV NODE_ENV=production
 
 # Expose port
 EXPOSE 3000
 
-# Start API (which also serves web build)
-CMD ["npm", "start"]
+# Start API (which also serves the built web)
+CMD ["node", "apps/api/dist/index.js"]
