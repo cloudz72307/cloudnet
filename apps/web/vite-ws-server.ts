@@ -1,31 +1,18 @@
 // vite-ws-server.ts
 import { WebSocketServer } from "ws";
 
-let wss: WebSocketServer | null = null;
-
-export function createWebSocketServer(httpServer: any) {
-  if (!httpServer) {
-    console.warn("[CloudNET] No HTTP server available for WebSocket.");
-    return;
-  }
-
-  if (wss) {
-    // Already created, do nothing
-    return;
-  }
-
-  wss = new WebSocketServer({ server: httpServer });
+export function createWebSocketServer() {
+  const wss = new WebSocketServer({ port: 5174 });
 
   wss.on("connection", ws => {
     ws.on("message", data => {
-      // Broadcast to all connected clients
-      for (const client of wss!.clients) {
-        if ((client as any).readyState === 1) {
-          (client as any).send(data.toString());
+      for (const client of wss.clients) {
+        if (client.readyState === 1) {
+          client.send(data.toString());
         }
       }
     });
   });
 
-  console.log("[CloudNET] WebSocket server attached to Vite dev server");
+  console.log("[CloudNET] WebSocket server running on ws://localhost:5174");
 }
