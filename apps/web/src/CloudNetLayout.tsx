@@ -56,7 +56,7 @@ type Theme = {
 
 type ViewMode = "home" | "createServer" | "chat" | "discoverServers";
 
-type AppMode = "chooseAccount" | "addAccount" | "login" | "app";
+type AppMode = "login" | "chooseAccount" | "addAccount" | "app";
 
 // ========= Theme / util =========
 
@@ -75,6 +75,8 @@ const makeTheme = (accent: string): Theme => ({
 
 const DEFAULT_ACCENT = "#4c7dff";
 const LS_KEY_ACCENT = "cloudnet_accent";
+const LS_LAST_USERNAME = "cloudnet_last_username";
+const LS_LAST_PASSWORD = "cloudnet_last_password";
 
 const createId = (prefix: string) =>
   `${prefix}_${Date.now()}_${Math.random().toString(16).slice(2)}`;
@@ -92,7 +94,7 @@ const useIsMobile = () => {
 
 // ========= Initial data =========
 
-const initialUsers: User[] = []; // no default accounts, no personal data
+const initialUsers: User[] = []; // no default accounts
 
 const initialChats: Chat[] = [
   {
@@ -139,8 +141,8 @@ const CloudNetLayout: React.FC = () => {
   });
   const theme = useMemo(() => makeTheme(accent), [accent]);
 
-  // app mode
-  const [appMode, setAppMode] = useState<AppMode>("chooseAccount");
+  // app mode (default: login)
+  const [appMode, setAppMode] = useState<AppMode>("login");
 
   // core state
   const [users, setUsers] = useState<User[]>(initialUsers);
@@ -161,6 +163,7 @@ const CloudNetLayout: React.FC = () => {
   const [settingsOpen, setSettingsOpen] = useState(false);
 
   // auth fields
+  const [loginUsername, setLoginUsername] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
   const [loginError, setLoginError] = useState<string | null>(null);
 
@@ -183,29 +186,28 @@ const CloudNetLayout: React.FC = () => {
     ws.current = socket;
 
     socket.onopen = () => {
-      // console.log("[CloudNET] WebSocket connected");
+      // connected
     };
 
     socket.onmessage = event => {
       try {
         const msg: Message = JSON.parse(event.data);
         if (!msg || !msg.id || !msg.chatId) return;
-
         setMessages(prev => {
           if (prev.some(m => m.id === msg.id)) return prev;
           return [...prev, msg];
         });
       } catch {
-        // ignore malformed frames
+        // ignore malformed
       }
     };
 
     socket.onerror = () => {
-      // console.warn("[CloudNET] WebSocket error");
+      // optional logging
     };
 
     socket.onclose = () => {
-      // console.log("[CloudNET] WebSocket disconnected");
+      // optional logging
     };
 
     return () => {
@@ -222,6 +224,25 @@ const CloudNetLayout: React.FC = () => {
       // ignore
     }
   }, [accent]);
+
+  // load last username/password into login screen
+  useEffect(() => {
+    try {
+      const savedUser = localStorage.getItem(LS_LAST_USERNAME);
+      const savedPass = localStorage.getItem(LS_LAST_PASSWORD);
+      if (savedUser) setLoginUsername(savedUser);
+      if (savedPass) setLoginPassword(savedPass);
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  // Redirect login → create account if no users
+  useEffect(() => {
+    if (appMode === "login" && users.length === 0) {
+      setAppMode("addAccount");
+    }
+  }, [appMode, users.length]);
 
   // ========= derived =========
 
@@ -296,7 +317,7 @@ const CloudNetLayout: React.FC = () => {
       return;
     }
     if (!/^[a-zA-Z0-9_]+$/.test(uname)) {
-      setNewAccountError("Username must be letters, numbers, and underscores.");
+      setNewAccountError("Username can only use letters, numbers, and underscores.");
       return;
     }
     if (users.some(u => u.username.toLowerCase() === uname.toLowerCase())) {
@@ -317,51 +338,74 @@ const CloudNetLayout: React.FC = () => {
     setUsers(prev => [...prev, newUser]);
     ensureUserInServer(newUser.id);
 
+    // remember credentials for login screen
+    try {
+      localStorage.setItem(LS_LAST_USERNAME, uname);
+      localStorage.setItem(LS_LAST_PASSWORD, pwd);
+    } catch {
+      // ignore
+    }
+
     setNewUsername("");
     setNewDisplayName("");
     setNewPassword("");
     setNewAccountError(null);
 
     setSelectedAccountId(newUser.id);
+    setLoginUsername(uname);
+    setLoginPassword(pwd);
     setAppMode("login");
-    setLoginPassword("");
     setLoginError(null);
   };
 
   const handleLogin = () => {
-    if (!selectedAccountId) {
-      setLoginError("Select an account first.");
-      return;
-    }
-    const pwd = loginPassword;
-    const user = users.find(u => u.id === selectedAccountId);
+    const uname = loginUsername.trim();
+    const pwd = loginPassword.trim();
+
+    const user = users.find(
+      u => u.username.toLowerCase() === uname.toLowerCase()
+    );
+
     if (!user) {
-      setLoginError("Account not found.");
+      // if user not found, go to create account
+      setAppMode("addAccount");
+      setNewUsername(uname);
+      setNewPassword(pwd);
+      setNewDisplayName(uname);
+      setLoginError(null);
       return;
     }
+
     if (user.banned) {
       setLoginError("This account is banned.");
       return;
     }
     if (user.password !== pwd) {
-      setLoginError("Incorrect password.");
+      setLoginError("Invalid credentials.");
       return;
     }
+
     setCurrentUser(user);
-    setLoginPassword("");
-    setLoginError(null);
     setAppMode("app");
     setViewMode("home");
     setActiveChatId("c_server_general");
     ensureUserInServer(user.id);
+    setSelectedAccountId(user.id);
+
+    try {
+      localStorage.setItem(LS_LAST_USERNAME, user.username);
+      localStorage.setItem(LS_LAST_PASSWORD, pwd);
+    } catch {
+      // ignore
+    }
+
+    setLoginError(null);
   };
 
   const handleLogout = () => {
     setCurrentUser(null);
-    setAppMode("chooseAccount");
-    setSelectedAccountId(null);
+    setAppMode("login");
     setSettingsOpen(false);
-    setLoginPassword("");
   };
 
   const handleDeleteAccount = (userId: string) => {
@@ -372,10 +416,6 @@ const CloudNetLayout: React.FC = () => {
         members: c.members.filter(id => id !== userId)
       }))
     );
-    if (selectedAccountId === userId) {
-      setSelectedAccountId(null);
-      setAppMode("chooseAccount");
-    }
     if (currentUser?.id === userId) {
       handleLogout();
     }
@@ -480,7 +520,7 @@ const CloudNetLayout: React.FC = () => {
     setActiveChatId(serverId);
   };
 
-  // ========= moderator / fun / settings (same as before, trimmed features) =========
+  // ========= misc helpers =========
 
   const getSenderRole = (msg: Message): Role | "system" => {
     if (msg.senderRole === "system") return "system";
@@ -503,7 +543,7 @@ const CloudNetLayout: React.FC = () => {
             letterSpacing: 0.4
           }}
         >
-          OWNER🛡️
+          OWNER
         </span>
       );
     if (user.role === "admin")
@@ -594,6 +634,166 @@ const CloudNetLayout: React.FC = () => {
 
   // ========= AUTH SCREENS =========
 
+  if (appMode === "login") {
+    return (
+      <div
+        style={{
+          height: "100vh",
+          width: "100vw",
+          background: theme.bgDarker,
+          color: theme.text,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, sans-serif"
+        }}
+      >
+        <div
+          style={{
+            width: 380,
+            maxWidth: "100%",
+            background: theme.bgLight,
+            borderRadius: 12,
+            border: `1px solid ${theme.border}`,
+            boxShadow: "0 18px 60px rgba(0,0,0,0.65)",
+            padding: 20,
+            display: "flex",
+            flexDirection: "column",
+            gap: 12
+          }}
+        >
+          <div
+            style={{
+              fontSize: 18,
+              fontWeight: 700
+            }}
+          >
+            Sign in
+          </div>
+          <div
+            style={{
+              fontSize: 12,
+              color: theme.textMuted
+            }}
+          >
+            Username and password are stored only in your browser.
+          </div>
+
+          <label
+            style={{
+              fontSize: 11,
+              color: theme.textMuted
+            }}
+          >
+            USERNAME
+          </label>
+          <input
+            value={loginUsername}
+            onChange={e => setLoginUsername(e.target.value)}
+            style={{
+              borderRadius: 6,
+              border: `1px solid ${theme.border}`,
+              background: theme.bgDark,
+              color: theme.text,
+              fontSize: 13,
+              padding: "6px 8px",
+              outline: "none"
+            }}
+            placeholder="username"
+          />
+
+          <label
+            style={{
+              fontSize: 11,
+              color: theme.textMuted,
+              marginTop: 6
+            }}
+          >
+            PASSWORD
+          </label>
+          <input
+            type="password"
+            value={loginPassword}
+            onChange={e => setLoginPassword(e.target.value)}
+            style={{
+              borderRadius: 6,
+              border: `1px solid ${theme.border}`,
+              background: theme.bgDark,
+              color: theme.text,
+              fontSize: 13,
+              padding: "6px 8px",
+              outline: "none"
+            }}
+            placeholder="••••••••"
+          />
+
+          {loginError && (
+            <div
+              style={{
+                fontSize: 11,
+                color: theme.danger
+              }}
+            >
+              {loginError}
+            </div>
+          )}
+
+          <button
+            onClick={handleLogin}
+            style={{
+              marginTop: 8,
+              padding: "8px 10px",
+              borderRadius: 6,
+              border: "none",
+              background: theme.accent,
+              color: "#000",
+              fontWeight: 600,
+              cursor: "pointer",
+              fontSize: 13
+            }}
+          >
+            Login
+          </button>
+
+          <button
+            onClick={() => {
+              setAppMode("chooseAccount");
+              setLoginError(null);
+            }}
+            style={{
+              marginTop: 4,
+              padding: "6px 10px",
+              borderRadius: 6,
+              border: `1px solid ${theme.border}`,
+              background: "transparent",
+              color: theme.textMuted,
+              cursor: "pointer",
+              fontSize: 12
+            }}
+          >
+            Switch account
+          </button>
+
+          <button
+            onClick={() => setAppMode("addAccount")}
+            style={{
+              marginTop: 4,
+              padding: "6px 10px",
+              borderRadius: 6,
+              border: "none",
+              background: theme.bgDark,
+              color: theme.textMuted,
+              cursor: "pointer",
+              fontSize: 12
+            }}
+          >
+            Create new account
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   if (appMode === "chooseAccount") {
     return (
       <div
@@ -628,16 +828,7 @@ const CloudNetLayout: React.FC = () => {
               fontWeight: 700
             }}
           >
-            Choose an account
-          </div>
-          <div
-            style={{
-              fontSize: 12,
-              color: theme.textMuted
-            }}
-          >
-            No accounts are stored in this file. You create everything at
-            runtime.
+            Switch account
           </div>
 
           <div
@@ -664,14 +855,15 @@ const CloudNetLayout: React.FC = () => {
               </div>
             )}
             {users
-              .filter(u => u.username.toLowerCase() !== "cloudz") // hide owner from switch list
+              .filter(u => u.username.toLowerCase() !== "cloudz") // hide owner
               .map(u => (
                 <div
                   key={u.id}
                   onClick={() => {
                     setSelectedAccountId(u.id);
-                    setAppMode("login");
+                    setLoginUsername(u.username);
                     setLoginPassword("");
+                    setAppMode("login");
                     setLoginError(null);
                   }}
                   style={{
@@ -752,6 +944,22 @@ const CloudNetLayout: React.FC = () => {
           >
             Add account
           </button>
+
+          <button
+            onClick={() => setAppMode("login")}
+            style={{
+              marginTop: 4,
+              padding: "6px 10px",
+              borderRadius: 6,
+              border: `1px solid ${theme.border}`,
+              background: "transparent",
+              color: theme.textMuted,
+              cursor: "pointer",
+              fontSize: 12
+            }}
+          >
+            Back to login
+          </button>
         </div>
       </div>
     );
@@ -793,15 +1001,6 @@ const CloudNetLayout: React.FC = () => {
           >
             Create account
           </div>
-          <div
-            style={{
-              fontSize: 12,
-              color: theme.textMuted
-            }}
-          >
-            Use username <b>cloudz</b> to become owner. No data is stored in
-            this file.
-          </div>
 
           <label
             style={{
@@ -823,7 +1022,7 @@ const CloudNetLayout: React.FC = () => {
               padding: "6px 8px",
               outline: "none"
             }}
-            placeholder="cloudz"
+            placeholder="username"
           />
 
           <label
@@ -847,7 +1046,7 @@ const CloudNetLayout: React.FC = () => {
               padding: "6px 8px",
               outline: "none"
             }}
-            placeholder="Shown in chat (ignored if username is cloudz)"
+            placeholder="Shown in chat"
           />
 
           <label
@@ -872,7 +1071,7 @@ const CloudNetLayout: React.FC = () => {
               padding: "6px 8px",
               outline: "none"
             }}
-            placeholder="Keep this secret; not stored anywhere else"
+            placeholder="Keep this secret"
           />
 
           {newAccountError && (
@@ -911,7 +1110,7 @@ const CloudNetLayout: React.FC = () => {
             </button>
             <button
               onClick={() => {
-                setAppMode("chooseAccount");
+                setAppMode("login");
                 setNewAccountError(null);
               }}
               style={{
@@ -924,210 +1123,9 @@ const CloudNetLayout: React.FC = () => {
                 fontSize: 13
               }}
             >
-              Cancel
+              Back to login
             </button>
           </div>
-        </div>
-      </div>
-    );
-  }
-
-  if (appMode === "login") {
-    const account =
-      (selectedAccountId &&
-        users.find(u => u.id === selectedAccountId)) ||
-      null;
-    return (
-      <div
-        style={{
-          height: "100vh",
-          width: "100vw",
-          background: theme.bgDarker,
-          color: theme.text,
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, sans-serif"
-        }}
-      >
-        <div
-          style={{
-            width: 380,
-            maxWidth: "100%",
-            background: theme.bgLight,
-            borderRadius: 12,
-            border: `1px solid ${theme.border}`,
-            boxShadow: "0 18px 60px rgba(0,0,0,0.65)",
-            padding: 20,
-            display: "flex",
-            flexDirection: "column",
-            gap: 12
-          }}
-        >
-          <div
-            style={{
-              fontSize: 18,
-              fontWeight: 700
-            }}
-          >
-            Login
-          </div>
-
-          {account ? (
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 8
-              }}
-            >
-              <div
-                style={{
-                  width: 26,
-                  height: 26,
-                  borderRadius: 999,
-                  background: theme.accentSoft,
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  fontSize: 13,
-                  fontWeight: 700
-                }}
-              >
-                {account.displayName.slice(0, 1).toUpperCase()}
-              </div>
-              <div
-                style={{
-                  display: "flex",
-                  flexDirection: "column"
-                }}
-              >
-                <span
-                  style={{
-                    fontSize: 13,
-                    fontWeight: 600
-                  }}
-                >
-                  {account.displayName}
-                </span>
-                <span
-                  style={{
-                    fontSize: 11,
-                    color: theme.textMuted
-                  }}
-                >
-                  @{account.username}
-                </span>
-              </div>
-              <div style={{ marginLeft: "auto" }}>{renderRoleTag(account)}</div>
-            </div>
-          ) : (
-            <div
-              style={{
-                fontSize: 12,
-                color: theme.danger
-              }}
-            >
-              No account selected.
-            </div>
-          )}
-
-          <label
-            style={{
-              fontSize: 11,
-              color: theme.textMuted,
-              marginTop: 6
-            }}
-          >
-            PASSWORD
-          </label>
-          <input
-            type="password"
-            value={loginPassword}
-            onChange={e => setLoginPassword(e.target.value)}
-            style={{
-              borderRadius: 6,
-              border: `1px solid ${theme.border}`,
-              background: theme.bgDark,
-              color: theme.text,
-              fontSize: 13,
-              padding: "6px 8px",
-              outline: "none"
-            }}
-            placeholder="••••••••"
-          />
-
-          {loginError && (
-            <div
-              style={{
-                fontSize: 11,
-                color: theme.danger
-              }}
-            >
-              {loginError}
-            </div>
-          )}
-
-          <div
-            style={{
-              display: "flex",
-              gap: 8,
-              marginTop: 6
-            }}
-          >
-            <button
-              onClick={handleLogin}
-              style={{
-                flex: 1,
-                padding: "8px 10px",
-                borderRadius: 6,
-                border: "none",
-                background: theme.accent,
-                color: "#000",
-                fontWeight: 600,
-                cursor: "pointer",
-                fontSize: 13
-              }}
-            >
-              Login
-            </button>
-            <button
-              onClick={() => {
-                setAppMode("chooseAccount");
-                setLoginError(null);
-              }}
-              style={{
-                padding: "8px 10px",
-                borderRadius: 6,
-                border: `1px solid ${theme.border}`,
-                background: "transparent",
-                color: theme.textMuted,
-                cursor: "pointer",
-                fontSize: 13
-              }}
-            >
-              Switch account
-            </button>
-          </div>
-
-          {account && (
-            <button
-              onClick={() => handleDeleteAccount(account.id)}
-              style={{
-                marginTop: 6,
-                padding: "6px 10px",
-                borderRadius: 6,
-                border: "none",
-                background: theme.danger,
-                color: "#000",
-                fontWeight: 600,
-                cursor: "pointer",
-                fontSize: 12
-              }}
-            >
-              Delete this account (local only)
-            </button>
-          )}
         </div>
       </div>
     );
@@ -1210,7 +1208,7 @@ const CloudNetLayout: React.FC = () => {
           <button
             style={{
               height: 28,
-              width: 90,
+              width: 110,
               borderRadius: 999,
               border: "none",
               background:
@@ -1595,7 +1593,7 @@ const CloudNetLayout: React.FC = () => {
                       color: theme.textMuted
                     }}
                   >
-                    Spin up a new realm
+                    Spin up a new space
                   </span>
                 </>
               )}
@@ -2081,7 +2079,7 @@ const CloudNetLayout: React.FC = () => {
                       fontSize: 13
                     }}
                   >
-                    Pick something on the left.
+                    Pick a server or DM on the left.
                   </div>
                 )}
                 {activeChat && (
@@ -2347,12 +2345,12 @@ const CreateServerView: React.FC<{
             color: theme.textMuted
           }}
         >
-          Name it. Chaos comes later.
+          Name it however you want.
         </div>
         <input
           value={name}
           onChange={e => setName(e.target.value)}
-          placeholder="My epic server"
+          placeholder="My server"
           style={{
             borderRadius: 6,
             border: `1px solid ${theme.border}`,
@@ -2645,7 +2643,7 @@ const SettingsPanel: React.FC<{
           </div>
         </section>
 
-        {/* owner note */}
+        {/* owner-specific UI is intentionally silent now */}
         {isOwner && (
           <section>
             <div
@@ -2655,7 +2653,7 @@ const SettingsPanel: React.FC<{
                 marginBottom: 4
               }}
             >
-              Owner
+              Owner controls
             </div>
             <div
               style={{
@@ -2663,8 +2661,7 @@ const SettingsPanel: React.FC<{
                 color: theme.textMuted
               }}
             >
-              You become owner by using the username <b>cloudz</b>. Nothing
-              about that is stored in this file.
+              This account has elevated permissions inside the app.
             </div>
           </section>
         )}
