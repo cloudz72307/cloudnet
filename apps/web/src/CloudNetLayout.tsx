@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 
-// ===== Types =====
+// ========= Types =========
 
 type Role = "owner" | "admin" | "user";
 
@@ -9,9 +9,12 @@ type User = {
   username: string;
   displayName: string;
   role: Role;
-  password: string; // in-memory only
+  password: string;
   banned?: boolean;
   kicked?: boolean;
+  muted?: boolean;
+  rainbowName?: boolean;
+  tempMod?: boolean;
 };
 
 type ChatKind = "server" | "dm" | "group";
@@ -26,10 +29,9 @@ type Chat = {
 type Message = {
   id: string;
   chatId: string;
-  senderId: string;
-  senderUsername: string;
+  senderId: string | "system";
   senderDisplayName: string;
-  senderRole: Role;
+  senderRole: Role | "system";
   content: string;
   createdAt: number;
 };
@@ -47,11 +49,11 @@ type Theme = {
   danger: string;
 };
 
-type ViewMode = "chat" | "home" | "createServer";
+type ViewMode = "home" | "createServer" | "chat";
 
-type AppMode = "auth" | "app";
+type AppMode = "chooseAccount" | "addAccount" | "login" | "app";
 
-// ===== Theme / constants =====
+// ========= Theme / util =========
 
 const makeTheme = (accent: string): Theme => ({
   bgDark: "#050811",
@@ -68,20 +70,13 @@ const makeTheme = (accent: string): Theme => ({
 
 const DEFAULT_ACCENT = "#4c7dff";
 
-const ownerBadgeStyle: React.CSSProperties = {
-  padding: "2px 6px",
-  borderRadius: 4,
-  background: "#ffffff", // white highlight
-  color: "#f5c542", // gold text
-  fontSize: 10,
-  fontWeight: 800,
-  letterSpacing: 0.4
-};
+const LS_KEY_ACCENT = "cloudnet_accent";
 
-// ===== Util =====
+const createId = (prefix: string) =>
+  `${prefix}_${Date.now()}_${Math.random().toString(16).slice(2)}`;
 
 const useIsMobile = () => {
-  const [isMobile, setIsMobile] = useState<boolean>(false);
+  const [isMobile, setIsMobile] = useState(false);
   useEffect(() => {
     const check = () => setIsMobile(window.innerWidth <= 768);
     check();
@@ -91,113 +86,29 @@ const useIsMobile = () => {
   return isMobile;
 };
 
-const createId = (prefix: string) =>
-  `${prefix}_${Date.now()}_${Math.random().toString(16).slice(2)}`;
-
-// ===== Initial data =====
+// ========= Initial data (no users, safe) =========
 
 let messageCounter = 1;
 
-const initialUsersBase: User[] = [
-  {
-    id: "u_cloudz",
-    username: "cloudz",
-    displayName: "cloudz",
-    role: "owner",
-    // Replace this locally with your own password; app just compares strings.
-    password: "YOUR_OWNER_PASSWORD"
-  },
-  {
-    id: "u_alex",
-    username: "alex",
-    displayName: "alex",
-    role: "user",
-    password: "alex123"
-  },
-  {
-    id: "u_mira",
-    username: "mira",
-    displayName: "mira",
-    role: "user",
-    password: "mira123"
-  }
-];
+const initialUsers: User[] = []; // no default accounts, no personal data
 
-const initialChatsBase: Chat[] = [
+const initialChats: Chat[] = [
   {
     id: "c_server_general",
     name: "general",
     kind: "server",
-    members: initialUsersBase.map(u => u.id)
-  },
-  {
-    id: "c_dm_alex",
-    name: "alex",
-    kind: "dm",
-    members: ["u_cloudz", "u_alex"]
-  },
-  {
-    id: "c_group_build",
-    name: "build-squad",
-    kind: "group",
-    members: ["u_cloudz", "u_alex", "u_mira"]
+    members: []
   }
 ];
 
-const initialMessagesBase: Message[] = [
-  {
-    id: `m_${messageCounter++}`,
-    chatId: "c_server_general",
-    senderId: "u_alex",
-    senderUsername: "alex",
-    senderDisplayName: "alex",
-    senderRole: "user",
-    content: "Welcome to CloudNET.",
-    createdAt: Date.now() - 1000 * 60 * 3
-  },
-  {
-    id: `m_${messageCounter++}`,
-    chatId: "c_server_general",
-    senderId: "u_cloudz",
-    senderUsername: "cloudz",
-    senderDisplayName: "cloudz",
-    senderRole: "owner",
-    content: "I own this place. 🛡️",
-    createdAt: Date.now() - 1000 * 60 * 2
-  },
-  {
-    id: `m_${messageCounter++}`,
-    chatId: "c_dm_alex",
-    senderId: "u_alex",
-    senderUsername: "alex",
-    senderDisplayName: "alex",
-    senderRole: "user",
-    content: "Yo, DM test.",
-    createdAt: Date.now() - 1000 * 60
-  },
-  {
-    id: `m_${messageCounter++}`,
-    chatId: "c_group_build",
-    senderId: "u_mira",
-    senderUsername: "mira",
-    senderDisplayName: "mira",
-    senderRole: "user",
-    content: "Group chat vibes.",
-    createdAt: Date.now() - 1000 * 30
-  }
-];
+const initialMessages: Message[] = [];
 
-// LocalStorage keys
-const LS_KEY_ACCENT = "cloudnet_accent";
-const LS_KEY_DISPLAYNAME_PREFIX = "cloudnet_displayname_";
-const LS_KEY_USERNAME_PREFIX = "cloudnet_username_";
-
-// ===== Main layout =====
+// ========= Main component =========
 
 const CloudNetLayout: React.FC = () => {
   const isMobile = useIsMobile();
 
-  // theme (accent stored in localStorage)
+  // theme
   const [accent, setAccent] = useState<string>(() => {
     if (typeof window === "undefined") return DEFAULT_ACCENT;
     try {
@@ -208,42 +119,54 @@ const CloudNetLayout: React.FC = () => {
   });
   const theme = useMemo(() => makeTheme(accent), [accent]);
 
-  // app mode: auth or app
-  const [appMode, setAppMode] = useState<AppMode>("auth");
+  // app mode
+  const [appMode, setAppMode] = useState<AppMode>("chooseAccount");
 
-  // core domain state (in-memory)
-  const [users, setUsers] = useState<User[]>(initialUsersBase);
-  const [chats, setChats] = useState<Chat[]>(initialChatsBase);
-  const [messages, setMessages] = useState<Message[]>(initialMessagesBase);
+  // core state
+  const [users, setUsers] = useState<User[]>(initialUsers);
+  const [chats, setChats] = useState<Chat[]>(initialChats);
+  const [messages, setMessages] = useState<Message[]>(initialMessages);
 
-  // authenticated user
   const [currentUser, setCurrentUser] = useState<User | null>(null);
-
-  // base view state
-  const [activeChatId, setActiveChatId] = useState<string | null>(
-    "c_server_general"
+  const [selectedAccountId, setSelectedAccountId] = useState<string | null>(
+    null
   );
-  const [viewMode, setViewMode] = useState<ViewMode>("chat");
 
-  // typing indicator
+  const [viewMode, setViewMode] = useState<ViewMode>("home");
+  const [activeChatId, setActiveChatId] = useState<string | null>(null);
+
   const [draftsByChat, setDraftsByChat] = useState<Record<string, string>>({});
   const [typingByChat, setTypingByChat] = useState<Record<string, boolean>>({});
 
-  // admin selection
+  const [settingsOpen, setSettingsOpen] = useState(false);
+
+  // auth fields
+  const [loginPassword, setLoginPassword] = useState("");
+  const [loginError, setLoginError] = useState<string | null>(null);
+
+  const [newUsername, setNewUsername] = useState("");
+  const [newDisplayName, setNewDisplayName] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [newAccountError, setNewAccountError] = useState<string | null>(null);
+
+  // admin target
   const [adminSelectedUserId, setAdminSelectedUserId] = useState<string | null>(
     null
   );
 
-  // settings panel
-  const [settingsOpen, setSettingsOpen] = useState<boolean>(false);
+  // ========= persistence =========
 
-  // ===== Login state =====
+  useEffect(() => {
+    try {
+      localStorage.setItem(LS_KEY_ACCENT, accent);
+    } catch {
+      // ignore
+    }
+  }, [accent]);
 
-  const [loginUsername, setLoginUsername] = useState("");
-  const [loginPassword, setLoginPassword] = useState("");
-  const [loginError, setLoginError] = useState<string | null>(null);
+  // ========= derived =========
 
-  // ===== Derived =====
+  const isOwner = currentUser?.role === "owner";
 
   const activeChat = useMemo(
     () => chats.find(c => c.id === activeChatId) || null,
@@ -260,6 +183,11 @@ const CloudNetLayout: React.FC = () => {
     [messages, activeChatId]
   );
 
+  const serverChats = useMemo(
+    () => chats.filter(c => c.kind === "server"),
+    [chats]
+  );
+
   const dmAndGroupChats = useMemo(() => {
     if (!currentUser) return [];
     return chats.filter(
@@ -269,130 +197,146 @@ const CloudNetLayout: React.FC = () => {
     );
   }, [chats, currentUser]);
 
-  const serverChats = useMemo(
-    () => chats.filter(c => c.kind === "server"),
-    [chats]
-  );
-
   const friends = useMemo(() => {
     if (!currentUser) return [];
     return users.filter(u => u.id !== currentUser.id);
   }, [users, currentUser]);
 
-  const isOwner = currentUser?.role === "owner";
-
-  const getUserById = (id: string) => users.find(u => u.id === id) || null;
-
   const typingActive =
     activeChatId && typingByChat[activeChatId] && draftsByChat[activeChatId];
 
-  // ===== Persistence helpers =====
+  const getUserById = (id: string) => users.find(u => u.id === id) || null;
 
-  useEffect(() => {
-    try {
-      localStorage.setItem(LS_KEY_ACCENT, accent);
-    } catch {
-      // ignore
+  // ========= auth logic =========
+
+  const ensureUserInServer = (userId: string) => {
+    setChats(prev =>
+      prev.map(c =>
+        c.id === "c_server_general"
+          ? {
+              ...c,
+              members: c.members.includes(userId)
+                ? c.members
+                : [...c.members, userId]
+            }
+          : c
+      )
+    );
+  };
+
+  const handleCreateAccount = () => {
+    const uname = newUsername.trim();
+    const pwd = newPassword.trim();
+    const dname =
+      uname.toLowerCase() === "cloudz"
+        ? "cloudz"
+        : newDisplayName.trim() || uname;
+
+    if (!uname || !pwd) {
+      setNewAccountError("Username and password are required.");
+      return;
     }
-  }, [accent]);
-
-  useEffect(() => {
-    if (!currentUser) return;
-    try {
-      localStorage.setItem(
-        `${LS_KEY_DISPLAYNAME_PREFIX}${currentUser.username}`,
-        currentUser.displayName
-      );
-      localStorage.setItem(
-        `${LS_KEY_USERNAME_PREFIX}${currentUser.id}`,
-        currentUser.username
-      );
-    } catch {
-      // ignore
+    if (!/^[a-zA-Z0-9_]+$/.test(uname)) {
+      setNewAccountError("Username must be letters, numbers, and underscores.");
+      return;
     }
-  }, [currentUser?.displayName, currentUser?.username]);
-
-  // on mount, try to load personalized display names/usernames for initial users
-  useEffect(() => {
-    try {
-      setUsers(prev =>
-        prev.map(u => {
-          const storedDisplay = localStorage.getItem(
-            `${LS_KEY_DISPLAYNAME_PREFIX}${u.username}`
-          );
-          const storedUsername = localStorage.getItem(
-            `${LS_KEY_USERNAME_PREFIX}${u.id}`
-          );
-          return {
-            ...u,
-            displayName: storedDisplay || u.displayName,
-            username: storedUsername || u.username
-          };
-        })
-      );
-    } catch {
-      // ignore
+    if (users.some(u => u.username.toLowerCase() === uname.toLowerCase())) {
+      setNewAccountError("That username already exists.");
+      return;
     }
-  }, []);
 
-  // ===== Auth logic =====
+    const role: Role = uname.toLowerCase() === "cloudz" ? "owner" : "user";
+
+    const newUser: User = {
+      id: createId("u"),
+      username: uname,
+      displayName: dname,
+      password: pwd,
+      role
+    };
+
+    setUsers(prev => [...prev, newUser]);
+    ensureUserInServer(newUser.id);
+
+    setNewUsername("");
+    setNewDisplayName("");
+    setNewPassword("");
+    setNewAccountError(null);
+
+    setSelectedAccountId(newUser.id);
+    setAppMode("login");
+    setLoginPassword("");
+    setLoginError(null);
+  };
 
   const handleLogin = () => {
-    const uname = loginUsername.trim();
+    if (!selectedAccountId) {
+      setLoginError("Select an account first.");
+      return;
+    }
     const pwd = loginPassword;
-    if (!uname || !pwd) {
-      setLoginError("Enter username and password.");
+    const user = users.find(u => u.id === selectedAccountId);
+    if (!user) {
+      setLoginError("Account not found.");
       return;
     }
-
-    const user = users.find(
-      u => u.username.toLowerCase() === uname.toLowerCase()
-    );
-    if (!user || user.password !== pwd) {
-      setLoginError("Invalid credentials.");
-      return;
-    }
-
     if (user.banned) {
       setLoginError("This account is banned.");
       return;
     }
-
-    // success
-    setLoginError(null);
-    setCurrentUser(user);
-    setAppMode("app");
-
-    // default chat
-    if (chats.length > 0) {
-      setActiveChatId("c_server_general");
-      setViewMode("chat");
+    if (user.password !== pwd) {
+      setLoginError("Incorrect password.");
+      return;
     }
+    setCurrentUser(user);
+    setLoginPassword("");
+    setLoginError(null);
+    setAppMode("app");
+    setViewMode("home");
+    setActiveChatId("c_server_general");
   };
 
   const handleLogout = () => {
     setCurrentUser(null);
-    setAppMode("auth");
+    setAppMode("chooseAccount");
+    setSelectedAccountId(null);
     setSettingsOpen(false);
     setLoginPassword("");
   };
 
-  // ===== Chat actions =====
+  const handleDeleteAccount = (userId: string) => {
+    setUsers(prev => prev.filter(u => u.id !== userId));
+    setChats(prev =>
+      prev.map(c => ({
+        ...c,
+        members: c.members.filter(id => id !== userId)
+      }))
+    );
+    if (selectedAccountId === userId) {
+      setSelectedAccountId(null);
+      setAppMode("chooseAccount");
+    }
+    if (currentUser?.id === userId) {
+      handleLogout();
+    }
+  };
+
+  // ========= chat actions =========
 
   const sendMessage = (chatId: string) => {
     if (!currentUser) return;
-    const draft = draftsByChat[chatId]?.trim();
-    if (!draft) return;
+    const raw = draftsByChat[chatId] || "";
+    const text = raw.trim();
+    if (!text) return;
     const now = Date.now();
 
     const newMessage: Message = {
       id: `m_${messageCounter++}`,
       chatId,
       senderId: currentUser.id,
-      senderUsername: currentUser.username,
       senderDisplayName: currentUser.displayName,
       senderRole: currentUser.role,
-      content: draft,
+      content: text,
       createdAt: now
     };
 
@@ -406,13 +350,53 @@ const CloudNetLayout: React.FC = () => {
     setTypingByChat(prev => ({ ...prev, [chatId]: value.trim().length > 0 }));
   };
 
-  const handleDeleteMessage = (messageId: string) => {
-    if (!isOwner) return;
-    setMessages(prev => prev.filter(m => m.id !== messageId));
+  const handleCreateServer = (name: string) => {
+    if (!currentUser) return;
+    const n = name.trim();
+    if (!n) return;
+    const id = createId("c_server");
+    const newChat: Chat = {
+      id,
+      name: n,
+      kind: "server",
+      members: [currentUser.id]
+    };
+    setChats(prev => [...prev, newChat]);
+    setViewMode("chat");
+    setActiveChatId(id);
+  };
+
+  const handleOpenChat = (chatId: string) => {
+    setViewMode("chat");
+    setActiveChatId(chatId);
+  };
+
+  const handleSwitchToHome = () => {
+    setViewMode("home");
+    setActiveChatId(null);
+  };
+
+  const handleSwitchToCreateServer = () => {
+    setViewMode("createServer");
+    setActiveChatId(null);
+  };
+
+  const handleMobileBackToSidebar = () => {
+    setActiveChatId(null);
+    setViewMode("home");
+  };
+
+  // ========= moderator actions =========
+
+  const safeOwnerGuard = (targetId: string) => {
+    const u = getUserById(targetId);
+    if (!u) return false;
+    if (u.username.toLowerCase() === "cloudz") return false; // cannot harm owner
+    return true;
   };
 
   const handleBanUser = (userId: string) => {
-    if (!isOwner) return;
+    if (!isOwner || !safeOwnerGuard(userId)) return;
     setUsers(prev =>
       prev.map(u =>
         u.id === userId
@@ -426,7 +410,7 @@ const CloudNetLayout: React.FC = () => {
   };
 
   const handleKickUser = (userId: string) => {
-    if (!isOwner) return;
+    if (!isOwner || !safeOwnerGuard(userId)) return;
     setUsers(prev =>
       prev.map(u =>
         u.id === userId
@@ -437,10 +421,17 @@ const CloudNetLayout: React.FC = () => {
           : u
       )
     );
+    setChats(prev =>
+      prev.map(c =>
+        c.members.includes(userId)
+          ? { ...c, members: c.members.filter(id => id !== userId) }
+          : c
+      )
+    );
   };
 
   const handleResetUsername = (userId: string) => {
-    if (!isOwner) return;
+    if (!isOwner || !safeOwnerGuard(userId)) return;
     setUsers(prev =>
       prev.map(u =>
         u.id === userId
@@ -455,7 +446,7 @@ const CloudNetLayout: React.FC = () => {
   };
 
   const handleForceLogoutUser = (userId: string) => {
-    if (!isOwner) return;
+    if (!isOwner || !safeOwnerGuard(userId)) return;
     setUsers(prev =>
       prev.map(u =>
         u.id === userId
@@ -466,65 +457,147 @@ const CloudNetLayout: React.FC = () => {
           : u
       )
     );
-    setChats(prev =>
-      prev.map(c =>
-        c.members.includes(userId)
-          ? {
-              ...c,
-              members: c.members.filter(mId => mId !== userId)
-            }
-          : c
-      )
-    );
-    if (currentUser && currentUser.id === userId) {
+    if (currentUser?.id === userId) {
       handleLogout();
     }
   };
 
-  const handleCopyUsername = async (userId: string) => {
-    const target = users.find(u => u.id === userId);
-    if (!target) return;
-    try {
-      await navigator.clipboard.writeText(target.username);
-    } catch {
-      // ignore
-    }
+  const handleToggleMuteUser = (userId: string) => {
+    if (!isOwner || !safeOwnerGuard(userId)) return;
+    setUsers(prev =>
+      prev.map(u =>
+        u.id === userId
+          ? {
+              ...u,
+              muted: !u.muted
+            }
+          : u
+      )
+    );
   };
 
-  const handleCreateServer = (name: string) => {
-    if (!name.trim()) return;
-    const id = createId("c_server");
-    const newChat: Chat = {
-      id,
-      name: name.trim(),
-      kind: "server",
-      members: users.map(u => u.id)
+  // ========= promote / role actions =========
+
+  const handlePromoteToAdmin = (userId: string) => {
+    if (!isOwner || !safeOwnerGuard(userId)) return;
+    setUsers(prev =>
+      prev.map(u =>
+        u.id === userId
+          ? {
+              ...u,
+              role: "admin",
+              tempMod: false
+            }
+          : u
+      )
+    );
+  };
+
+  const handleDemoteAdmin = (userId: string) => {
+    if (!isOwner || !safeOwnerGuard(userId)) return;
+    setUsers(prev =>
+      prev.map(u =>
+        u.id === userId
+          ? {
+              ...u,
+              role: "user",
+              tempMod: false
+            }
+          : u
+      )
+    );
+  };
+
+  const handleGrantTempMod = (userId: string) => {
+    if (!isOwner || !safeOwnerGuard(userId)) return;
+    setUsers(prev =>
+      prev.map(u =>
+        u.id === userId
+          ? {
+              ...u,
+              role: "admin",
+              tempMod: true
+            }
+          : u
+      )
+    );
+  };
+
+  // ========= fun features (affect data) =========
+
+  const randomNicknames = [
+    "ghost",
+    "byte",
+    "spark",
+    "glitch",
+    "omega",
+    "phantom",
+    "static",
+    "nova"
+  ];
+
+  const handleToggleRainbowName = (userId: string) => {
+    if (!isOwner || !safeOwnerGuard(userId)) return;
+    setUsers(prev =>
+      prev.map(u =>
+        u.id === userId
+          ? {
+              ...u,
+              rainbowName: !u.rainbowName
+            }
+          : u
+      )
+    );
+  };
+
+  const handleRandomNickname = (userId: string) => {
+    if (!isOwner || !safeOwnerGuard(userId)) return;
+    const nick =
+      randomNicknames[Math.floor(Math.random() * randomNicknames.length)];
+    setUsers(prev =>
+      prev.map(u =>
+        u.id === userId
+          ? {
+              ...u,
+              displayName: nick
+            }
+          : u
+      )
+    );
+  };
+
+  const handleSystemPing = () => {
+    if (!isOwner || !currentUser) return;
+    const now = Date.now();
+    const allChatIds = chats.map(c => c.id);
+    const newMessages: Message[] = allChatIds.map(chatId => ({
+      id: `m_${messageCounter++}`,
+      chatId,
+      senderId: "system",
+      senderDisplayName: "system",
+      senderRole: "system",
+      content: "⚡ system ping from owner",
+      createdAt: now
+    }));
+    setMessages(prev => [...prev, ...newMessages]);
+  };
+
+  const handleExplodeChat = () => {
+    if (!isOwner || !currentUser || !activeChat) return;
+    const now = Date.now();
+    const msg: Message = {
+      id: `m_${messageCounter++}`,
+      chatId: activeChat.id,
+      senderId: "system",
+      senderDisplayName: "system",
+      senderRole: "system",
+      content: "💥 chat exploded (visual only) 💥",
+      createdAt: now
     };
-    setChats(prev => [...prev, newChat]);
-    setViewMode("chat");
-    setActiveChatId(id);
+    setMessages(prev => [...prev, msg]);
   };
 
-  const handleSwitchToHome = () => {
-    setViewMode("home");
-    setActiveChatId(null);
-  };
-
-  const handleSwitchToCreateServer = () => {
-    setViewMode("createServer");
-    setActiveChatId(null);
-  };
-
-  const handleOpenChat = (chatId: string) => {
-    setViewMode("chat");
-    setActiveChatId(chatId);
-  };
-
-  const handleMobileBackToSidebar = () => {
-    setActiveChatId(null);
-  };
-
-  // ===== Settings actions =====
+  // ========= settings / profile =========
 
   const handleUpdateProfile = (updates: {
     displayName?: string;
@@ -532,6 +605,8 @@ const CloudNetLayout: React.FC = () => {
     password?: string;
   }) => {
     if (!currentUser) return;
+    const guardOwnerUsername =
+      currentUser.username.toLowerCase() === "cloudz";
 
     setUsers(prev =>
       prev.map(u =>
@@ -543,9 +618,15 @@ const CloudNetLayout: React.FC = () => {
                   ? updates.displayName
                   : u.displayName,
               username:
-                updates.username !== undefined ? updates.username : u.username,
+                updates.username !== undefined
+                  ? guardOwnerUsername
+                    ? "cloudz"
+                    : updates.username
+                  : u.username,
               password:
-                updates.password !== undefined ? updates.password : u.password
+                updates.password !== undefined
+                  ? updates.password
+                  : u.password
             }
           : u
       )
@@ -561,7 +642,9 @@ const CloudNetLayout: React.FC = () => {
                 : prev.displayName,
             username:
               updates.username !== undefined
-                ? updates.username
+                ? guardOwnerUsername
+                  ? "cloudz"
+                  : updates.username
                 : prev.username,
             password:
               updates.password !== undefined
@@ -572,20 +655,30 @@ const CloudNetLayout: React.FC = () => {
     );
   };
 
-  const handleChangeAccent = (newAccent: string) => {
-    setAccent(newAccent);
+  const handleChangeAccent = (color: string) => {
+    setAccent(color);
   };
 
-  // ===== Render helpers =====
+  // ========= UI helpers =========
 
-  const renderOwnerBadge = (role: Role) => {
-    if (role !== "owner") return null;
-    return <span style={ownerBadgeStyle}>OWNER🛡️</span>;
-  };
-
-  const renderRoleTag = (role: Role) => {
-    if (role === "owner") return renderOwnerBadge(role);
-    if (role === "admin")
+  const renderRoleTag = (user: User) => {
+    if (user.role === "owner")
+      return (
+        <span
+          style={{
+            padding: "2px 6px",
+            borderRadius: 4,
+            background: "#ffffff",
+            color: "#f5c542",
+            fontSize: 10,
+            fontWeight: 800,
+            letterSpacing: 0.4
+          }}
+        >
+          OWNER🛡️
+        </span>
+      );
+    if (user.role === "admin")
       return (
         <span
           style={{
@@ -603,19 +696,39 @@ const CloudNetLayout: React.FC = () => {
     return null;
   };
 
-  // ===== AUTH SCREEN =====
+  const renderSenderName = (msg: Message) => {
+    const base = msg.senderDisplayName;
+    if (msg.senderRole === "system") return "system";
+    const sender = msg.senderId === "system" ? null : getUserById(msg.senderId);
+    if (!sender) return base;
+    return sender.displayName;
+  };
 
-  if (appMode === "auth") {
+  const getSenderRole = (msg: Message): Role | "system" => {
+    if (msg.senderRole === "system") return "system";
+    const sender =
+      msg.senderId === "system" ? null : getUserById(msg.senderId);
+    return sender?.role || msg.senderRole;
+  };
+
+  const isRainbowName = (userId: string) => {
+    const u = getUserById(userId);
+    return !!u?.rainbowName;
+  };
+
+  // ========= AUTH SCREENS =========
+
+  if (appMode === "chooseAccount") {
     return (
       <div
         style={{
           height: "100vh",
           width: "100vw",
           background: theme.bgDarker,
+          color: theme.text,
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
-          color: theme.text,
           fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, sans-serif"
         }}
       >
@@ -626,8 +739,8 @@ const CloudNetLayout: React.FC = () => {
             background: theme.bgLight,
             borderRadius: 12,
             border: `1px solid ${theme.border}`,
-            padding: 20,
             boxShadow: "0 18px 60px rgba(0,0,0,0.65)",
+            padding: 20,
             display: "flex",
             flexDirection: "column",
             gap: 12
@@ -639,7 +752,7 @@ const CloudNetLayout: React.FC = () => {
               fontWeight: 700
             }}
           >
-            Sign in to CloudNET
+            Choose an account
           </div>
           <div
             style={{
@@ -647,86 +760,106 @@ const CloudNetLayout: React.FC = () => {
               color: theme.textMuted
             }}
           >
-            Username + password. No auto‑login. You control the keys.
+            No accounts are stored in this file. You create everything at
+            runtime.
           </div>
 
           <div
             style={{
-              display: "flex",
-              flexDirection: "column",
-              gap: 6,
-              marginTop: 8
-            }}
-          >
-            <label
-              style={{
-                fontSize: 11,
-                color: theme.textMuted
-              }}
-            >
-              USERNAME
-            </label>
-            <input
-              value={loginUsername}
-              onChange={e => setLoginUsername(e.target.value)}
-              style={{
-                borderRadius: 6,
-                border: `1px solid ${theme.border}`,
-                background: theme.bgDark,
-                color: theme.text,
-                fontSize: 13,
-                padding: "6px 8px",
-                outline: "none"
-              }}
-              placeholder="cloudz"
-            />
-          </div>
-
-          <div
-            style={{
+              maxHeight: 200,
+              overflowY: "auto",
+              borderRadius: 8,
+              background: theme.bgDark,
+              border: `1px solid ${theme.border}`,
+              padding: 8,
               display: "flex",
               flexDirection: "column",
               gap: 6
             }}
           >
-            <label
-              style={{
-                fontSize: 11,
-                color: theme.textMuted
-              }}
-            >
-              PASSWORD
-            </label>
-            <input
-              type="password"
-              value={loginPassword}
-              onChange={e => setLoginPassword(e.target.value)}
-              style={{
-                borderRadius: 6,
-                border: `1px solid ${theme.border}`,
-                background: theme.bgDark,
-                color: theme.text,
-                fontSize: 13,
-                padding: "6px 8px",
-                outline: "none"
-              }}
-              placeholder="••••••••"
-            />
+            {users.length === 0 && (
+              <div
+                style={{
+                  fontSize: 12,
+                  color: theme.textMuted
+                }}
+              >
+                No accounts yet. Create one to begin.
+              </div>
+            )}
+            {users.map(u => (
+              <div
+                key={u.id}
+                onClick={() => {
+                  setSelectedAccountId(u.id);
+                  setAppMode("login");
+                  setLoginPassword("");
+                  setLoginError(null);
+                }}
+                style={{
+                  padding: "6px 8px",
+                  borderRadius: 6,
+                  background: theme.bgLighter,
+                  cursor: "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: 8
+                }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 8
+                  }}
+                >
+                  <div
+                    style={{
+                      width: 24,
+                      height: 24,
+                      borderRadius: 999,
+                      background: theme.accentSoft,
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      fontSize: 12,
+                      fontWeight: 700
+                    }}
+                  >
+                    {u.displayName.slice(0, 1).toUpperCase()}
+                  </div>
+                  <div
+                    style={{
+                      display: "flex",
+                      flexDirection: "column"
+                    }}
+                  >
+                    <span
+                      style={{
+                        fontSize: 13,
+                        fontWeight: 600
+                      }}
+                    >
+                      {u.displayName}
+                    </span>
+                    <span
+                      style={{
+                        fontSize: 11,
+                        color: theme.textMuted
+                      }}
+                    >
+                      @{u.username}
+                    </span>
+                  </div>
+                </div>
+                {renderRoleTag(u)}
+              </div>
+            ))}
           </div>
 
-          {loginError && (
-            <div
-              style={{
-                fontSize: 11,
-                color: theme.danger
-              }}
-            >
-              {loginError}
-            </div>
-          )}
-
           <button
-            onClick={handleLogin}
+            onClick={() => setAppMode("addAccount")}
             style={{
               marginTop: 4,
               padding: "8px 10px",
@@ -739,25 +872,390 @@ const CloudNetLayout: React.FC = () => {
               fontSize: 13
             }}
           >
-            Login
+            Add account
           </button>
+        </div>
+      </div>
+    );
+  }
 
+  if (appMode === "addAccount") {
+    return (
+      <div
+        style={{
+          height: "100vh",
+          width: "100vw",
+          background: theme.bgDarker,
+          color: theme.text,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, sans-serif"
+        }}
+      >
+        <div
+          style={{
+            width: 380,
+            maxWidth: "100%",
+            background: theme.bgLight,
+            borderRadius: 12,
+            border: `1px solid ${theme.border}`,
+            boxShadow: "0 18px 60px rgba(0,0,0,0.65)",
+            padding: 20,
+            display: "flex",
+            flexDirection: "column",
+            gap: 10
+          }}
+        >
           <div
             style={{
-              marginTop: 6,
+              fontSize: 18,
+              fontWeight: 700
+            }}
+          >
+            Create account
+          </div>
+          <div
+            style={{
+              fontSize: 12,
+              color: theme.textMuted
+            }}
+          >
+            Use username <b>cloudz</b> to become owner. No data is stored in
+            this file.
+          </div>
+
+          <label
+            style={{
               fontSize: 11,
               color: theme.textMuted
             }}
           >
-            Owner account is <b>cloudz</b>. Set your password in{" "}
-            <code>CloudNetLayout.tsx</code> and keep it offline.
+            USERNAME
+          </label>
+          <input
+            value={newUsername}
+            onChange={e => setNewUsername(e.target.value)}
+            style={{
+              borderRadius: 6,
+              border: `1px solid ${theme.border}`,
+              background: theme.bgDark,
+              color: theme.text,
+              fontSize: 13,
+              padding: "6px 8px",
+              outline: "none"
+            }}
+            placeholder="cloudz"
+          />
+
+          <label
+            style={{
+              fontSize: 11,
+              color: theme.textMuted,
+              marginTop: 6
+            }}
+          >
+            DISPLAY NAME
+          </label>
+          <input
+            value={newDisplayName}
+            onChange={e => setNewDisplayName(e.target.value)}
+            style={{
+              borderRadius: 6,
+              border: `1px solid ${theme.border}`,
+              background: theme.bgDark,
+              color: theme.text,
+              fontSize: 13,
+              padding: "6px 8px",
+              outline: "none"
+            }}
+            placeholder="Shown in chat (ignored if username is cloudz)"
+          />
+
+          <label
+            style={{
+              fontSize: 11,
+              color: theme.textMuted,
+              marginTop: 6
+            }}
+          >
+            PASSWORD
+          </label>
+          <input
+            type="password"
+            value={newPassword}
+            onChange={e => setNewPassword(e.target.value)}
+            style={{
+              borderRadius: 6,
+              border: `1px solid ${theme.border}`,
+              background: theme.bgDark,
+              color: theme.text,
+              fontSize: 13,
+              padding: "6px 8px",
+              outline: "none"
+            }}
+            placeholder="Keep this secret; not stored anywhere else"
+          />
+
+          {newAccountError && (
+            <div
+              style={{
+                fontSize: 11,
+                color: theme.danger
+              }}
+            >
+              {newAccountError}
+            </div>
+          )}
+
+          <div
+            style={{
+              display: "flex",
+              gap: 8,
+              marginTop: 6
+            }}
+          >
+            <button
+              onClick={handleCreateAccount}
+              style={{
+                flex: 1,
+                padding: "8px 10px",
+                borderRadius: 6,
+                border: "none",
+                background: theme.accent,
+                color: "#000",
+                fontWeight: 600,
+                cursor: "pointer",
+                fontSize: 13
+              }}
+            >
+              Create
+            </button>
+            <button
+              onClick={() => {
+                setAppMode("chooseAccount");
+                setNewAccountError(null);
+              }}
+              style={{
+                padding: "8px 10px",
+                borderRadius: 6,
+                border: `1px solid ${theme.border}`,
+                background: "transparent",
+                color: theme.textMuted,
+                cursor: "pointer",
+                fontSize: 13
+              }}
+            >
+              Cancel
+            </button>
           </div>
         </div>
       </div>
     );
   }
 
-  // ===== APP UI =====
+  if (appMode === "login") {
+    const account =
+      selectedAccountId &&
+      users.find(u => u.id === selectedAccountId) ||
+      null;
+    return (
+      <div
+        style={{
+          height: "100vh",
+          width: "100vw",
+          background: theme.bgDarker,
+          color: theme.text,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, sans-serif"
+        }}
+      >
+        <div
+          style={{
+            width: 380,
+            maxWidth: "100%",
+            background: theme.bgLight,
+            borderRadius: 12,
+            border: `1px solid ${theme.border}`,
+            boxShadow: "0 18px 60px rgba(0,0,0,0.65)",
+            padding: 20,
+            display: "flex",
+            flexDirection: "column",
+            gap: 12
+          }}
+        >
+          <div
+            style={{
+              fontSize: 18,
+              fontWeight: 700
+            }}
+          >
+            Login
+          </div>
+
+          {account ? (
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 8
+              }}
+            >
+              <div
+                style={{
+                  width: 26,
+                  height: 26,
+                  borderRadius: 999,
+                  background: theme.accentSoft,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  fontSize: 13,
+                  fontWeight: 700
+                }}
+              >
+                {account.displayName.slice(0, 1).toUpperCase()}
+              </div>
+              <div
+                style={{
+                  display: "flex",
+                  flexDirection: "column"
+                }}
+              >
+                <span
+                  style={{
+                    fontSize: 13,
+                    fontWeight: 600
+                  }}
+                >
+                  {account.displayName}
+                </span>
+                <span
+                  style={{
+                    fontSize: 11,
+                    color: theme.textMuted
+                  }}
+                >
+                  @{account.username}
+                </span>
+              </div>
+              <div style={{ marginLeft: "auto" }}>{renderRoleTag(account)}</div>
+            </div>
+          ) : (
+            <div
+              style={{
+                fontSize: 12,
+                color: theme.danger
+              }}
+            >
+              No account selected.
+            </div>
+          )}
+
+          <label
+            style={{
+              fontSize: 11,
+              color: theme.textMuted,
+              marginTop: 6
+            }}
+          >
+            PASSWORD
+          </label>
+          <input
+            type="password"
+            value={loginPassword}
+            onChange={e => setLoginPassword(e.target.value)}
+            style={{
+              borderRadius: 6,
+              border: `1px solid ${theme.border}`,
+              background: theme.bgDark,
+              color: theme.text,
+              fontSize: 13,
+              padding: "6px 8px",
+              outline: "none"
+            }}
+            placeholder="••••••••"
+          />
+
+          {loginError && (
+            <div
+              style={{
+                fontSize: 11,
+                color: theme.danger
+              }}
+            >
+              {loginError}
+            </div>
+          )}
+
+          <div
+            style={{
+              display: "flex",
+              gap: 8,
+              marginTop: 6
+            }}
+          >
+            <button
+              onClick={handleLogin}
+              style={{
+                flex: 1,
+                padding: "8px 10px",
+                borderRadius: 6,
+                border: "none",
+                background: theme.accent,
+                color: "#000",
+                fontWeight: 600,
+                cursor: "pointer",
+                fontSize: 13
+              }}
+            >
+              Login
+            </button>
+            <button
+              onClick={() => {
+                setAppMode("chooseAccount");
+                setLoginError(null);
+              }}
+              style={{
+                padding: "8px 10px",
+                borderRadius: 6,
+                border: `1px solid ${theme.border}`,
+                background: "transparent",
+                color: theme.textMuted,
+                cursor: "pointer",
+                fontSize: 13
+              }}
+            >
+              Switch account
+            </button>
+          </div>
+
+          {account && (
+            <button
+              onClick={() => handleDeleteAccount(account.id)}
+              style={{
+                marginTop: 6,
+                padding: "6px 10px",
+                borderRadius: 6,
+                border: "none",
+                background: theme.danger,
+                color: "#000",
+                fontWeight: 600,
+                cursor: "pointer",
+                fontSize: 12
+              }}
+            >
+              Delete this account (local only)
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // ========= APP UI =========
 
   if (!currentUser) return null;
 
@@ -773,7 +1271,7 @@ const CloudNetLayout: React.FC = () => {
         fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, sans-serif"
       }}
     >
-      {/* Top app bar */}
+      {/* top app bar */}
       <div
         style={{
           height: 48,
@@ -785,8 +1283,13 @@ const CloudNetLayout: React.FC = () => {
           padding: "0 12px"
         }}
       >
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          {/* C button = Home */}
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8
+          }}
+        >
           <button
             style={{
               height: 28,
@@ -804,7 +1307,6 @@ const CloudNetLayout: React.FC = () => {
           >
             C
           </button>
-          {/* + button = Create server */}
           <button
             style={{
               height: 28,
@@ -827,7 +1329,6 @@ const CloudNetLayout: React.FC = () => {
           >
             +
           </button>
-
           <span
             style={{
               fontSize: 13,
@@ -839,7 +1340,6 @@ const CloudNetLayout: React.FC = () => {
           </span>
         </div>
 
-        {/* current user summary + settings */}
         <div
           style={{
             display: "flex",
@@ -880,11 +1380,27 @@ const CloudNetLayout: React.FC = () => {
           >
             {currentUser.displayName.slice(0, 1).toUpperCase()}
           </div>
-          <div style={{ display: "flex", flexDirection: "column" }}>
-            <span style={{ fontSize: 12, fontWeight: 600 }}>
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column"
+            }}
+          >
+            <span
+              style={{
+                fontSize: 12,
+                fontWeight: 600
+              }}
+            >
               {currentUser.displayName}
             </span>
-            <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 4
+              }}
+            >
               <span
                 style={{
                   fontSize: 10,
@@ -893,24 +1409,24 @@ const CloudNetLayout: React.FC = () => {
               >
                 @{currentUser.username}
               </span>
-              {renderRoleTag(currentUser.role)}
+              {renderRoleTag(currentUser)}
             </div>
           </div>
         </div>
       </div>
 
-      {/* Main area */}
+      {/* main body */}
       <div
         style={{
           flex: 1,
           minHeight: 0,
           display: "flex",
           flexDirection: "row",
-          overflow: "hidden",
-          position: "relative"
+          position: "relative",
+          overflow: "hidden"
         }}
       >
-        {/* Left sidebar: servers + chats */}
+        {/* left sidebar */}
         <div
           style={{
             width: isMobile ? "100%" : 260,
@@ -925,51 +1441,52 @@ const CloudNetLayout: React.FC = () => {
             transition: isMobile ? "left 0.25s ease" : undefined,
             zIndex: 20,
             background: theme.bgLight,
+            borderRight: `1px solid ${theme.border}`,
             display: "flex",
-            flexDirection: "column",
-            borderRight: `1px solid ${theme.border}`
+            flexDirection: "column"
           }}
         >
-          {/* sidebar header */}
           <div
             style={{
               height: 48,
+              borderBottom: `1px solid ${theme.border}`,
               display: "flex",
               alignItems: "center",
+              justifyContent: "space-between",
               padding: "0 12px",
-              borderBottom: `1px solid ${theme.border}`,
-              fontWeight: 600,
-              fontSize: 14,
-              justifyContent: "space-between"
+              fontSize: 13,
+              fontWeight: 600
             }}
           >
-            <div style={{ color: theme.text }}>server-1</div>
+            <span>server-1</span>
             {isMobile && activeChatId && viewMode === "chat" && (
               <button
+                onClick={handleMobileBackToSidebar}
                 style={{
-                  background: "transparent",
                   border: "none",
+                  background: "transparent",
                   color: theme.textMuted,
                   fontSize: 13,
                   cursor: "pointer"
                 }}
-                onClick={handleMobileBackToSidebar}
               >
                 Close
               </button>
             )}
           </div>
 
-          {/* channels / chats */}
           <div
             style={{
               flex: 1,
               overflowY: "auto",
-              padding: "8px 8px 8px 8px"
+              padding: 8,
+              display: "flex",
+              flexDirection: "column",
+              gap: 12
             }}
           >
-            {/* Server channels */}
-            <section style={{ marginBottom: 16 }}>
+            {/* server channels */}
+            <section>
               <div
                 style={{
                   fontSize: 11,
@@ -1021,8 +1538,8 @@ const CloudNetLayout: React.FC = () => {
               })}
             </section>
 
-            {/* DM & group chats */}
-            <section style={{ marginBottom: 16 }}>
+            {/* dms / groups */}
+            <section>
               <div
                 style={{
                   fontSize: 11,
@@ -1078,11 +1595,21 @@ const CloudNetLayout: React.FC = () => {
                   </div>
                 );
               })}
+              {dmAndGroupChats.length === 0 && (
+                <div
+                  style={{
+                    fontSize: 12,
+                    color: theme.textMuted
+                  }}
+                >
+                  No DMs yet.
+                </div>
+              )}
             </section>
           </div>
         </div>
 
-        {/* Center content: Home / CreateServer / Chat */}
+        {/* center content */}
         <div
           style={{
             flex: 1,
@@ -1092,7 +1619,7 @@ const CloudNetLayout: React.FC = () => {
             position: "relative"
           }}
         >
-          {/* Top bar for center area */}
+          {/* center top bar */}
           <div
             style={{
               height: 48,
@@ -1101,8 +1628,7 @@ const CloudNetLayout: React.FC = () => {
               display: "flex",
               alignItems: "center",
               justifyContent: "space-between",
-              padding: "0 12px",
-              position: "relative"
+              padding: "0 12px"
             }}
           >
             <div
@@ -1112,18 +1638,17 @@ const CloudNetLayout: React.FC = () => {
                 gap: 6
               }}
             >
-              {/* mobile back button */}
               {isMobile && activeChatId && viewMode === "chat" && (
                 <button
+                  onClick={handleMobileBackToSidebar}
                   style={{
-                    background: "transparent",
                     border: "none",
+                    background: "transparent",
                     color: theme.textMuted,
-                    fontSize: 20,
+                    fontSize: 18,
                     marginRight: 4,
                     cursor: "pointer"
                   }}
-                  onClick={handleMobileBackToSidebar}
                 >
                   ☰
                 </button>
@@ -1149,7 +1674,6 @@ const CloudNetLayout: React.FC = () => {
                   </span>
                 </>
               )}
-
               {viewMode === "createServer" && (
                 <>
                   <span
@@ -1170,7 +1694,6 @@ const CloudNetLayout: React.FC = () => {
                   </span>
                 </>
               )}
-
               {viewMode === "chat" && activeChat && (
                 <>
                   <span
@@ -1194,7 +1717,6 @@ const CloudNetLayout: React.FC = () => {
                   </span>
                 </>
               )}
-
               {viewMode === "chat" && !activeChat && (
                 <span
                   style={{
@@ -1206,8 +1728,6 @@ const CloudNetLayout: React.FC = () => {
                 </span>
               )}
             </div>
-
-            {/* typing indicator */}
             {viewMode === "chat" && typingActive && (
               <div
                 style={{
@@ -1221,7 +1741,7 @@ const CloudNetLayout: React.FC = () => {
             )}
           </div>
 
-          {/* Center body */}
+          {/* center main */}
           <div
             style={{
               flex: 1,
@@ -1229,16 +1749,16 @@ const CloudNetLayout: React.FC = () => {
               minHeight: 0
             }}
           >
-            {/* HOME VIEW */}
+            {/* home */}
             {viewMode === "home" && (
               <div
                 style={{
                   flex: 1,
                   padding: 16,
+                  background: theme.bgDarker,
                   display: "flex",
                   flexDirection: isMobile ? "column" : "row",
-                  gap: 16,
-                  background: theme.bgDarker
+                  gap: 16
                 }}
               >
                 {/* DMs / groups */}
@@ -1348,13 +1868,13 @@ const CloudNetLayout: React.FC = () => {
                           color: theme.textMuted
                         }}
                       >
-                        No DMs yet. Be the first ping.
+                        No DMs yet.
                       </div>
                     )}
                   </div>
                 </div>
 
-                {/* Friends */}
+                {/* friends */}
                 <div
                   style={{
                     width: isMobile ? "100%" : 260,
@@ -1461,14 +1981,14 @@ const CloudNetLayout: React.FC = () => {
                             cursor: "pointer"
                           }}
                           onClick={() => {
-                            const dmExisting = chats.find(
+                            const existing = chats.find(
                               c =>
                                 c.kind === "dm" &&
                                 c.members.includes(currentUser.id) &&
                                 c.members.includes(friend.id)
                             );
-                            if (dmExisting) {
-                              handleOpenChat(dmExisting.id);
+                            if (existing) {
+                              handleOpenChat(existing.id);
                             } else {
                               const id = createId("c_dm");
                               const newChat: Chat = {
@@ -1493,7 +2013,7 @@ const CloudNetLayout: React.FC = () => {
                           color: theme.textMuted
                         }}
                       >
-                        No friends yet. Invite some chaos.
+                        No friends yet.
                       </div>
                     )}
                   </div>
@@ -1501,20 +2021,17 @@ const CloudNetLayout: React.FC = () => {
               </div>
             )}
 
-            {/* CREATE SERVER VIEW */}
+            {/* create server */}
             {viewMode === "createServer" && (
-              <CreateServerView
-                theme={theme}
-                onCreate={handleCreateServer}
-              />
+              <CreateServerView theme={theme} onCreate={handleCreateServer} />
             )}
 
-            {/* CHAT VIEW */}
+            {/* chat */}
             {viewMode === "chat" && (
               <div
                 style={{
                   flex: 1,
-                  display: activeChat ? "flex" : "flex",
+                  display: "flex",
                   flexDirection: "column",
                   background: theme.bgDarker
                 }}
@@ -1533,10 +2050,8 @@ const CloudNetLayout: React.FC = () => {
                     Pick something on the left.
                   </div>
                 )}
-
                 {activeChat && (
                   <>
-                    {/* messages list */}
                     <div
                       style={{
                         flex: 1,
@@ -1548,11 +2063,18 @@ const CloudNetLayout: React.FC = () => {
                       }}
                     >
                       {messagesForActiveChat.map(msg => {
-                        const sender = getUserById(msg.senderId);
-                        const isSelf = msg.senderId === currentUser.id;
-                        const effectiveName =
-                          msg.senderDisplayName || msg.senderUsername;
-
+                        const sender =
+                          msg.senderId === "system"
+                            ? null
+                            : getUserById(msg.senderId);
+                        const isSelf =
+                          sender && currentUser && sender.id === currentUser.id;
+                        const role = getSenderRole(msg);
+                        const rainbow =
+                          msg.senderId !== "system" &&
+                          sender &&
+                          sender.rainbowName;
+                        const muted = sender?.muted;
                         return (
                           <div
                             key={msg.id}
@@ -1573,60 +2095,68 @@ const CloudNetLayout: React.FC = () => {
                               <span
                                 style={{
                                   fontSize: 12,
-                                  fontWeight: 600
+                                  fontWeight: 600,
+                                  backgroundImage: rainbow
+                                    ? "linear-gradient(90deg, #f97316, #facc15, #22c55e, #0ea5e9, #a855f7, #ec4899)"
+                                    : undefined,
+                                  WebkitBackgroundClip: rainbow
+                                    ? "text"
+                                    : undefined,
+                                  color: rainbow ? "transparent" : theme.text
                                 }}
                               >
-                                {effectiveName}
+                                {renderSenderName(msg)}
                               </span>
-                              {renderRoleTag(msg.senderRole)}
-                              {sender?.banned && (
+                              {role !== "system" && sender
+                                ? renderRoleTag(sender)
+                                : null}
+                              {muted && (
                                 <span
                                   style={{
                                     fontSize: 10,
-                                    color: theme.danger
+                                    color: theme.textMuted
                                   }}
                                 >
-                                  (banned)
+                                  (muted)
+                                </span>
+                              )}
+                              {msg.senderRole === "system" && (
+                                <span
+                                  style={{
+                                    fontSize: 10,
+                                    color: theme.textMuted
+                                  }}
+                                >
+                                  [system]
                                 </span>
                               )}
                             </div>
-
                             <div
                               style={{
-                                background: isSelf
-                                  ? theme.accentSoft
-                                  : theme.bgLight,
+                                background:
+                                  msg.senderRole === "system"
+                                    ? theme.bgLighter
+                                    : isSelf
+                                    ? theme.accentSoft
+                                    : theme.bgLight,
                                 borderRadius: 8,
                                 padding: "6px 10px",
                                 fontSize: 13,
-                                color: isSelf ? theme.accent : theme.text,
+                                color:
+                                  msg.senderRole === "system"
+                                    ? theme.textMuted
+                                    : isSelf
+                                    ? theme.accent
+                                    : theme.text,
                                 display: "inline-flex",
-                                maxWidth: "80%",
-                                position: "relative"
+                                maxWidth: "80%"
                               }}
                             >
                               <span>{msg.content}</span>
-
-                              {isOwner && (
-                                <button
-                                  onClick={() => handleDeleteMessage(msg.id)}
-                                  style={{
-                                    border: "none",
-                                    background: "transparent",
-                                    color: theme.textMuted,
-                                    cursor: "pointer",
-                                    fontSize: 10,
-                                    marginLeft: 8
-                                  }}
-                                >
-                                  ✕
-                                </button>
-                              )}
                             </div>
                           </div>
                         );
                       })}
-
                       {messagesForActiveChat.length === 0 && (
                         <div
                           style={{
@@ -1634,12 +2164,10 @@ const CloudNetLayout: React.FC = () => {
                             color: theme.textMuted
                           }}
                         >
-                          No messages yet. Be the chaos.
+                          No messages yet.
                         </div>
                       )}
                     </div>
-
-                    {/* input + typing indicator bubble */}
                     {activeChat && (
                       <div
                         style={{
@@ -1723,11 +2251,11 @@ const CloudNetLayout: React.FC = () => {
           </div>
         </div>
 
-        {/* Right admin panel (owner only, hidden on mobile) */}
+        {/* right owner admin / fun menu */}
         {!isMobile && isOwner && (
           <div
             style={{
-              width: 260,
+              width: 280,
               borderLeft: `1px solid ${theme.border}`,
               background: theme.bgDark,
               display: "flex",
@@ -1745,7 +2273,7 @@ const CloudNetLayout: React.FC = () => {
                 fontWeight: 600
               }}
             >
-              Owner Control
+              Fun Admin Menu
             </div>
             <div
               style={{
@@ -1754,142 +2282,279 @@ const CloudNetLayout: React.FC = () => {
                 padding: 8,
                 display: "flex",
                 flexDirection: "column",
-                gap: 6
+                gap: 10
               }}
             >
-              {users.map(u => (
+              {/* moderation features (5) */}
+              <section>
                 <div
-                  key={u.id}
                   style={{
-                    borderRadius: 6,
-                    border: `1px solid ${theme.border}`,
-                    background:
-                      adminSelectedUserId === u.id
-                        ? theme.bgLighter
-                        : theme.bgDark,
-                    padding: 8,
+                    fontSize: 11,
+                    color: theme.textMuted,
+                    marginBottom: 4
+                  }}
+                >
+                  MODERATION (5)
+                </div>
+                {users
+                  .filter(u => u.id !== currentUser.id)
+                  .map(u => (
+                    <div
+                      key={u.id}
+                      style={{
+                        borderRadius: 6,
+                        border: `1px solid ${theme.border}`,
+                        background: theme.bgLight,
+                        padding: 6,
+                        marginBottom: 6
+                      }}
+                    >
+                      <div
+                        style={{
+                          display: "flex",
+                          justifyContent: "space-between",
+                          alignItems: "center",
+                          marginBottom: 4
+                        }}
+                      >
+                        <div
+                          style={{
+                            display: "flex",
+                            flexDirection: "column"
+                          }}
+                        >
+                          <span
+                            style={{
+                              fontSize: 12,
+                              fontWeight: 600
+                            }}
+                          >
+                            {u.displayName}
+                          </span>
+                          <span
+                            style={{
+                              fontSize: 10,
+                              color: theme.textMuted
+                            }}
+                          >
+                            @{u.username}
+                          </span>
+                        </div>
+                        {renderRoleTag(u)}
+                      </div>
+                      <div
+                        style={{
+                          display: "flex",
+                          flexWrap: "wrap",
+                          gap: 4
+                        }}
+                      >
+                        <AdminButton
+                          theme={theme}
+                          label="Ban"
+                          onClick={() => handleBanUser(u.id)}
+                        />
+                        <AdminButton
+                          theme={theme}
+                          label="Kick"
+                          onClick={() => handleKickUser(u.id)}
+                        />
+                        <AdminButton
+                          theme={theme}
+                          label="Reset name"
+                          onClick={() => handleResetUsername(u.id)}
+                        />
+                        <AdminButton
+                          theme={theme}
+                          label="Force logout"
+                          onClick={() => handleForceLogoutUser(u.id)}
+                        />
+                        <AdminButton
+                          theme={theme}
+                          label={u.muted ? "Unmute" : "Mute"}
+                          onClick={() => handleToggleMuteUser(u.id)}
+                        />
+                      </div>
+                    </div>
+                  ))}
+                {users.filter(u => u.id !== currentUser.id).length === 0 && (
+                  <div
+                    style={{
+                      fontSize: 11,
+                      color: theme.textMuted
+                    }}
+                  >
+                    No other users yet.
+                  </div>
+                )}
+              </section>
+
+              {/* promote features (3) */}
+              <section>
+                <div
+                  style={{
+                    fontSize: 11,
+                    color: theme.textMuted,
+                    marginBottom: 4
+                  }}
+                >
+                  PROMOTE (3)
+                </div>
+                {users
+                  .filter(u => u.id !== currentUser.id)
+                  .map(u => (
+                    <div
+                      key={u.id}
+                      style={{
+                        borderRadius: 6,
+                        border: `1px solid ${theme.border}`,
+                        background: theme.bgLight,
+                        padding: 6,
+                        marginBottom: 6
+                      }}
+                    >
+                      <div
+                        style={{
+                          display: "flex",
+                          justifyContent: "space-between",
+                          alignItems: "center",
+                          marginBottom: 4
+                        }}
+                      >
+                        <span
+                          style={{
+                            fontSize: 12,
+                            fontWeight: 600
+                          }}
+                        >
+                          {u.displayName}
+                        </span>
+                        {renderRoleTag(u)}
+                      </div>
+                      <div
+                        style={{
+                          display: "flex",
+                          flexWrap: "wrap",
+                          gap: 4
+                        }}
+                      >
+                        <AdminButton
+                          theme={theme}
+                          label="Promote admin"
+                          onClick={() => handlePromoteToAdmin(u.id)}
+                        />
+                        <AdminButton
+                          theme={theme}
+                          label="Demote admin"
+                          onClick={() => handleDemoteAdmin(u.id)}
+                        />
+                        <AdminButton
+                          theme={theme}
+                          label="Temp mod"
+                          onClick={() => handleGrantTempMod(u.id)}
+                        />
+                      </div>
+                    </div>
+                  ))}
+              </section>
+
+              {/* fun features (4) */}
+              <section>
+                <div
+                  style={{
+                    fontSize: 11,
+                    color: theme.textMuted,
+                    marginBottom: 4
+                  }}
+                >
+                  FUN (4)
+                </div>
+                {users
+                  .filter(u => u.id !== currentUser.id)
+                  .map(u => (
+                    <div
+                      key={u.id}
+                      style={{
+                        borderRadius: 6,
+                        border: `1px solid ${theme.border}`,
+                        background: theme.bgLight,
+                        padding: 6,
+                        marginBottom: 6
+                      }}
+                    >
+                      <div
+                        style={{
+                          display: "flex",
+                          justifyContent: "space-between",
+                          alignItems: "center",
+                          marginBottom: 4
+                        }}
+                      >
+                        <span
+                          style={{
+                            fontSize: 12,
+                            fontWeight: 600
+                          }}
+                        >
+                          {u.displayName}
+                        </span>
+                        {u.rainbowName && (
+                          <span
+                            style={{
+                              fontSize: 10,
+                              color: theme.textMuted
+                            }}
+                          >
+                            rainbow
+                          </span>
+                        )}
+                      </div>
+                      <div
+                        style={{
+                          display: "flex",
+                          flexWrap: "wrap",
+                          gap: 4
+                        }}
+                      >
+                        <AdminButton
+                          theme={theme}
+                          label={u.rainbowName ? "Stop rainbow" : "Rainbow"}
+                          onClick={() => handleToggleRainbowName(u.id)}
+                        />
+                        <AdminButton
+                          theme={theme}
+                          label="Random nick"
+                          onClick={() => handleRandomNickname(u.id)}
+                        />
+                      </div>
+                    </div>
+                  ))}
+
+                <div
+                  style={{
+                    marginTop: 6,
                     display: "flex",
                     flexDirection: "column",
                     gap: 4
                   }}
                 >
-                  <div
-                    style={{
-                      display: "flex",
-                      justifyContent: "space-between",
-                      alignItems: "center"
-                    }}
-                  >
-                    <div
-                      style={{
-                        display: "flex",
-                        flexDirection: "column"
-                      }}
-                    >
-                      <span
-                        style={{
-                          fontSize: 12,
-                          fontWeight: 600
-                        }}
-                      >
-                        {u.displayName}{" "}
-                        {u.role === "owner" && (
-                          <span style={{ ...ownerBadgeStyle, fontSize: 9 }}>
-                            OWNER🛡️
-                          </span>
-                        )}
-                      </span>
-                      <span
-                        style={{
-                          fontSize: 10,
-                          color: theme.textMuted
-                        }}
-                      >
-                        @{u.username}
-                      </span>
-                    </div>
-                    <button
-                      style={{
-                        border: "none",
-                        background: "transparent",
-                        color: theme.textMuted,
-                        cursor: "pointer",
-                        fontSize: 10
-                      }}
-                      onClick={() =>
-                        setAdminSelectedUserId(prev =>
-                          prev === u.id ? null : u.id
-                        )
-                      }
-                    >
-                      {adminSelectedUserId === u.id ? "Hide" : "Tools"}
-                    </button>
-                  </div>
-
-                  {adminSelectedUserId === u.id && (
-                    <div
-                      style={{
-                        display: "flex",
-                        flexWrap: "wrap",
-                        gap: 4,
-                        marginTop: 4
-                      }}
-                    >
-                      <button
-                        style={adminButtonStyle(theme)}
-                        onClick={() => handleCopyUsername(u.id)}
-                      >
-                        Copy Username
-                      </button>
-                      {u.id !== currentUser.id && (
-                        <>
-                          <button
-                            style={adminButtonStyle(theme)}
-                            onClick={() => handleBanUser(u.id)}
-                          >
-                            Ban
-                          </button>
-                          <button
-                            style={adminButtonStyle(theme)}
-                            onClick={() => handleKickUser(u.id)}
-                          >
-                            Kick
-                          </button>
-                          <button
-                            style={adminButtonStyle(theme)}
-                            onClick={() => handleResetUsername(u.id)}
-                          >
-                            Reset Name
-                          </button>
-                          <button
-                            style={adminButtonStyle(theme)}
-                            onClick={() => handleForceLogoutUser(u.id)}
-                          >
-                            Force Logout
-                          </button>
-                        </>
-                      )}
-                    </div>
-                  )}
-
-                  {(u.banned || u.kicked) && (
-                    <div
-                      style={{
-                        fontSize: 10,
-                        color: theme.danger
-                      }}
-                    >
-                      {u.banned && "Banned. "}
-                      {u.kicked && "Kicked. "}
-                    </div>
-                  )}
+                  <AdminButton
+                    theme={theme}
+                    label="System ping (all chats)"
+                    onClick={handleSystemPing}
+                  />
+                  <AdminButton
+                    theme={theme}
+                    label="Explode current chat"
+                    onClick={handleExplodeChat}
+                  />
                 </div>
-              ))}
+              </section>
             </div>
           </div>
         )}
 
-        {/* SETTINGS PANEL (slide-in) */}
+        {/* settings panel */}
         {settingsOpen && (
           <SettingsPanel
             theme={theme}
@@ -1906,24 +2571,34 @@ const CloudNetLayout: React.FC = () => {
   );
 };
 
-// ===== Small components / helpers =====
+// ========= small components =========
 
-const adminButtonStyle = (theme: Theme): React.CSSProperties => ({
-  fontSize: 10,
-  padding: "3px 6px",
-  borderRadius: 4,
-  border: "none",
-  background: theme.bgLighter,
-  color: theme.text,
-  cursor: "pointer"
-});
+const AdminButton: React.FC<{
+  theme: Theme;
+  label: string;
+  onClick: () => void;
+}> = ({ theme, label, onClick }) => (
+  <button
+    onClick={onClick}
+    style={{
+      fontSize: 10,
+      padding: "3px 6px",
+      borderRadius: 4,
+      border: "none",
+      background: theme.bgLighter,
+      color: theme.text,
+      cursor: "pointer"
+    }}
+  >
+    {label}
+  </button>
+);
 
 const CreateServerView: React.FC<{
   theme: Theme;
   onCreate: (name: string) => void;
 }> = ({ theme, onCreate }) => {
   const [name, setName] = useState("");
-
   return (
     <div
       style={{
@@ -1962,7 +2637,7 @@ const CreateServerView: React.FC<{
             color: theme.textMuted
           }}
         >
-          Give it a name. You can style the chaos later.
+          Name it. Chaos comes later.
         </div>
         <input
           value={name}
@@ -2105,7 +2780,7 @@ const SettingsPanel: React.FC<{
           gap: 12
         }}
       >
-        {/* Profile */}
+        {/* profile */}
         <section>
           <div
             style={{
@@ -2157,10 +2832,13 @@ const SettingsPanel: React.FC<{
             <input
               value={username}
               onChange={e => setUsername(e.target.value)}
+              disabled={currentUser.username.toLowerCase() === "cloudz"}
               style={{
                 borderRadius: 6,
                 border: `1px solid ${theme.border}`,
-                background: theme.bgDark,
+                background: currentUser.username.toLowerCase() === "cloudz"
+                  ? theme.bgLighter
+                  : theme.bgDark,
                 color: theme.text,
                 fontSize: 12,
                 padding: "5px 7px",
@@ -2212,7 +2890,7 @@ const SettingsPanel: React.FC<{
           </div>
         </section>
 
-        {/* Theme */}
+        {/* theme */}
         <section>
           <div
             style={{
@@ -2257,7 +2935,7 @@ const SettingsPanel: React.FC<{
           </div>
         </section>
 
-        {/* Owner-only */}
+        {/* owner note */}
         {isOwner && (
           <section>
             <div
@@ -2267,7 +2945,7 @@ const SettingsPanel: React.FC<{
                 marginBottom: 4
               }}
             >
-              Owner tools
+              Owner
             </div>
             <div
               style={{
@@ -2275,14 +2953,13 @@ const SettingsPanel: React.FC<{
                 color: theme.textMuted
               }}
             >
-              You&apos;re running this realm. Admin controls live in the right
-              panel; this is where you style yourself.
+              You become owner by using the username <b>cloudz</b>. Nothing
+              about that is stored in this file.
             </div>
           </section>
         )}
       </div>
 
-      {/* Logout */}
       <div
         style={{
           borderTop: `1px solid ${theme.border}`,
