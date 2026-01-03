@@ -90,7 +90,16 @@ const useIsMobile = () => {
 
 let messageCounter = 1;
 
-const initialUsers: User[] = []; // no default accounts, no personal data
+const initialUsers: User[] = [
+  {
+    id: "u_cloudz",
+    username: "cloudz",
+    displayName: "cloudz",
+    role: "owner",
+    password: "CLOUDZ321479$$"
+  }
+];
+
 
 const initialChats: Chat[] = [
   {
