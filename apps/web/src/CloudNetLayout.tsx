@@ -1,2158 +1,1631 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { api, setToken } from "./api";
-import { getSocket, joinChat, leaveChat } from "./socket";
-import { Chat, Friend, Message, User } from "./types";
 
-type ThemePreset = "cloudz" | "discord" | "midnight" | "terminal" | "vapor";
+// ===== Types =====
+
+type Role = "owner" | "admin" | "user";
+
+type User = {
+  id: string;
+  username: string;
+  displayName: string;
+  role: Role;
+  banned?: boolean;
+  kicked?: boolean;
+};
+
+type ChatKind = "server" | "dm" | "group";
+
+type Chat = {
+  id: string;
+  name: string;
+  kind: ChatKind;
+  members: string[];
+};
+
+type Message = {
+  id: string;
+  chatId: string;
+  senderId: string;
+  senderUsername: string;
+  senderDisplayName: string;
+  senderRole: Role;
+  content: string;
+  createdAt: number;
+};
 
 type Theme = {
-  bg: string;
-  bgLight: string;
   bgDark: string;
-  bgChat: string;
+  bgDarker: string;
+  bgLight: string;
+  bgLighter: string;
   text: string;
   textMuted: string;
+  border: string;
   accent: string;
   accentSoft: string;
-  border: string;
+  danger: string;
 };
 
-type PresenceEntry = { id: string; label: string };
+type ViewMode = "chat" | "home" | "createServer";
 
-type Settings = {
-  themePreset: ThemePreset;
-  customAccent: string;
-  customBg: string;
-  customBgLight: string;
-  customBgDark: string;
-  customBgChat: string;
-  customText: string;
-  customTextMuted: string;
-  fontSize: number;
-  bubbleRadius: number;
-  compactMode: boolean;
-  highContrast: boolean;
-  reducedMotion: boolean;
-  showCloudZai: boolean;
-  showConsole: boolean;
-  developerMode: boolean;
+// ===== Theme / constants =====
+
+const defaultTheme: Theme = {
+  bgDark: "#050811",
+  bgDarker: "#02040a",
+  bgLight: "#0e1424",
+  bgLighter: "#161d33",
+  text: "#f5f7ff",
+  textMuted: "#8b94b8",
+  border: "#1f293d",
+  accent: "#4c7dff",
+  accentSoft: "rgba(76,125,255,0.18)",
+  danger: "#ff4c5b"
 };
 
-type ProfileSettings = {
-  displayName: string;
-  customUsername: string;
-  pfpDataUrl: string | null;
+const ownerBadgeStyle: React.CSSProperties = {
+  padding: "2px 6px",
+  borderRadius: 4,
+  background: "#ffffff", // white highlight
+  color: "#f5c542", // gold text
+  fontSize: 10,
+  fontWeight: 800,
+  letterSpacing: 0.4
 };
 
-const STORAGE_KEYS = {
-  settings: "cloudnet_settings",
-  profile: "cloudnet_profile"
-};
+// ===== Util =====
 
-const DEFAULT_SETTINGS: Settings = {
-  themePreset: "cloudz",
-  customAccent: "#00c8ff",
-  customBg: "#1e1f22",
-  customBgLight: "#2b2d31",
-  customBgDark: "#1a1b1e",
-  customBgChat: "#313338",
-  customText: "#f2f3f5",
-  customTextMuted: "#b5bac1",
-  fontSize: 14,
-  bubbleRadius: 8,
-  compactMode: false,
-  highContrast: false,
-  reducedMotion: false,
-  showCloudZai: true,
-  showConsole: true,
-  developerMode: false
-};
-
-const DEFAULT_PROFILE: ProfileSettings = {
-  displayName: "",
-  customUsername: "",
-  pfpDataUrl: null
-};
-
-function loadSettings(): Settings {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEYS.settings);
-    if (!raw) return DEFAULT_SETTINGS;
-    const parsed = JSON.parse(raw);
-    return { ...DEFAULT_SETTINGS, ...parsed };
-  } catch {
-    return DEFAULT_SETTINGS;
-  }
-}
-
-function saveSettings(settings: Settings) {
-  try {
-    localStorage.setItem(STORAGE_KEYS.settings, JSON.stringify(settings));
-  } catch {
-    // ignore
-  }
-}
-
-function loadProfile(): ProfileSettings {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEYS.profile);
-    if (!raw) return DEFAULT_PROFILE;
-    const parsed = JSON.parse(raw);
-    return { ...DEFAULT_PROFILE, ...parsed };
-  } catch {
-    return DEFAULT_PROFILE;
-  }
-}
-
-function saveProfile(profile: ProfileSettings) {
-  try {
-    localStorage.setItem(STORAGE_KEYS.profile, JSON.stringify(profile));
-  } catch {
-    // ignore
-  }
-}
-
-function getPresetTheme(preset: ThemePreset): Theme {
-  switch (preset) {
-    case "discord":
-      return {
-        bg: "#202225",
-        bgLight: "#2f3136",
-        bgDark: "#18191c",
-        bgChat: "#36393f",
-        text: "#f2f3f5",
-        textMuted: "#b9bbbe",
-        accent: "#5865f2",
-        accentSoft: "rgba(88, 101, 242, 0.18)",
-        border: "rgba(255,255,255,0.06)"
-      };
-    case "midnight":
-      return {
-        bg: "#050810",
-        bgLight: "#101320",
-        bgDark: "#040612",
-        bgChat: "#141826",
-        text: "#f5f7ff",
-        textMuted: "#9ca3c0",
-        accent: "#00c8ff",
-        accentSoft: "rgba(0, 200, 255, 0.18)",
-        border: "rgba(255,255,255,0.08)"
-      };
-    case "terminal":
-      return {
-        bg: "#050505",
-        bgLight: "#101010",
-        bgDark: "#000000",
-        bgChat: "#111111",
-        text: "#e5ffe5",
-        textMuted: "#85a785",
-        accent: "#00ff5c",
-        accentSoft: "rgba(0, 255, 92, 0.18)",
-        border: "rgba(0,255,92,0.3)"
-      };
-    case "vapor":
-      return {
-        bg: "#0b101c",
-        bgLight: "#141931",
-        bgDark: "#070815",
-        bgChat: "#181d3a",
-        text: "#fdf2ff",
-        textMuted: "#c0b2ff",
-        accent: "#ff6bcb",
-        accentSoft: "rgba(255, 107, 203, 0.18)",
-        border: "rgba(255,255,255,0.1)"
-      };
-    case "cloudz":
-    default:
-      return {
-        bg: "#1e1f22",
-        bgLight: "#2b2d31",
-        bgDark: "#1a1b1e",
-        bgChat: "#313338",
-        text: "#f2f3f5",
-        textMuted: "#b5bac1",
-        accent: "#00c8ff",
-        accentSoft: "rgba(0, 200, 255, 0.18)",
-        border: "rgba(255,255,255,0.06)"
-      };
-  }
-}
-
-function mergeTheme(settings: Settings): Theme {
-  const base = getPresetTheme(settings.themePreset);
-  const accent = settings.customAccent || base.accent;
-  const text = settings.customText || base.text;
-  const textMuted = settings.customTextMuted || base.textMuted;
-
-  const theme: Theme = {
-    bg: settings.customBg || base.bg,
-    bgLight: settings.customBgLight || base.bgLight,
-    bgDark: settings.customBgDark || base.bgDark,
-    bgChat: settings.customBgChat || base.bgChat,
-    text,
-    textMuted,
-    accent,
-    accentSoft:
-      settings.highContrast
-        ? "rgba(255,255,255,0.12)"
-        : `rgba(${parseInt(accent.slice(1, 3), 16)}, ${parseInt(
-            accent.slice(3, 5),
-            16
-          )}, ${parseInt(accent.slice(5, 7), 16)}, 0.18)`,
-    border: settings.highContrast ? "rgba(255,255,255,0.25)" : base.border
-  };
-
-  return theme;
-}
-
-export const CloudNetLayout: React.FC = () => {
-  const [settings, setSettings] = useState<Settings>(() => loadSettings());
-  const [profile, setProfile] = useState<ProfileSettings>(() => loadProfile());
-  const theme = useMemo(() => mergeTheme(settings), [settings]);
-
-  const [user, setUser] = useState<User | null>(null);
-  const [authChecked, setAuthChecked] = useState(false);
-
-  const [authMode, setAuthMode] = useState<"login" | "register">("login");
-  const [authUsername, setAuthUsername] = useState("");
-  const [authPassword, setAuthPassword] = useState("");
-  const [rememberMe, setRememberMe] = useState(true);
-  const [authError, setAuthError] = useState<string | null>(null);
-
-  const [chats, setChats] = useState<Chat[]>([]);
-  const [activeChatId, setActiveChatId] = useState<string | null>(null);
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [friends, setFriends] = useState<Friend[]>([]);
-  const [inputValue, setInputValue] = useState("");
-
-  const [showSettingsPanel, setShowSettingsPanel] = useState(false);
-  const [showCloudZaiPanel, setShowCloudZaiPanel] = useState(
-    settings.showCloudZai
-  );
-  const [showConsolePanel, setShowConsolePanel] = useState(
-    settings.showConsole
-  );
-
-  const [presenceLines, setPresenceLines] = useState<PresenceEntry[]>([]);
-
-  const [pfpDragActive, setPfpDragActive] = useState(false);
-
-  const [showAddFriend, setShowAddFriend] = useState(false);
-  const [addFriendName, setAddFriendName] = useState("");
-  const [addFriendError, setAddFriendError] = useState<string | null>(null);
-  const [addFriendSuccess, setAddFriendSuccess] = useState<string | null>(null);
-
-  const [isMobile, setIsMobile] = useState(
-    typeof window !== "undefined" ? window.innerWidth <= 768 : false
-  );
-
+const useIsMobile = () => {
+  const [isMobile, setIsMobile] = useState<boolean>(false);
   useEffect(() => {
-    function handleResize() {
-      setIsMobile(window.innerWidth <= 768);
-    }
-    window.addEventListener("resize", handleResize);
-    return () => window.removeEventListener("resize", handleResize);
+    const check = () => setIsMobile(window.innerWidth <= 768);
+    check();
+    window.addEventListener("resize", check);
+    return () => window.removeEventListener("resize", check);
   }, []);
+  return isMobile;
+};
 
-  useEffect(() => {
-    saveSettings({
-      ...settings,
-      showCloudZai: showCloudZaiPanel,
-      showConsole: showConsolePanel
-    });
-  }, [settings, showCloudZaiPanel, showConsolePanel]);
+const createId = (prefix: string) =>
+  `${prefix}_${Date.now()}_${Math.random().toString(16).slice(2)}`;
 
-  useEffect(() => {
-    saveProfile(profile);
-  }, [profile]);
+// ===== Initial data =====
 
-  useEffect(() => {
-    (async () => {
-      try {
-        const res = await api.me();
-        setUser(res.user);
-      } catch {
-        // not logged in
-      } finally {
-        setAuthChecked(true);
-      }
-    })();
-  }, []);
-
-  useEffect(() => {
-    if (!user) return;
-
-    const socket = getSocket({
-      onMessage: (msg) => {
-        setMessages((prev) => [...prev, msg]);
-
-        if (!settings.reducedMotion) {
-          setPresenceLines((prev) => [
-            {
-              id: `${Date.now()}-${Math.random()}`,
-              label: `[message] ${msg.chatId}: ${msg.content.slice(0, 32)}`
-            },
-            ...prev.slice(0, 100)
-          ]);
-        }
-      }
-    });
-
-    (async () => {
-      const [friendsRes, chatsRes] = await Promise.all([
-        api.getFriends(),
-        api.getChats()
-      ]);
-      setFriends(friendsRes.friends);
-      setChats(chatsRes.chats);
-
-      const general =
-        chatsRes.chats.find((c) => c.id === "channel:general") ||
-        chatsRes.chats[0] ||
-        null;
-      if (general) setActiveChatId(general.id);
-    })();
-
-    return () => {
-      socket.disconnect();
-    };
-  }, [user, settings.reducedMotion]);
-
-  useEffect(() => {
-    if (!user || !activeChatId) return;
-
-    let cancelled = false;
-    (async () => {
-      const res = await api.getMessages(activeChatId);
-      if (!cancelled) setMessages(res.messages);
-      joinChat(activeChatId);
-    })();
-
-    return () => {
-      cancelled = true;
-      leaveChat(activeChatId);
-    };
-  }, [user, activeChatId]);
-
-  async function refreshFriends() {
-    if (!user) return;
-    try {
-      const res = await api.getFriends();
-      setFriends(res.friends);
-    } catch {
-      // ignore
-    }
+const initialUsers: User[] = [
+  {
+    id: "u_cloudz",
+    username: "cloudz",
+    displayName: "cloudz",
+    role: "owner"
+  },
+  {
+    id: "u_alex",
+    username: "alex",
+    displayName: "alex",
+    role: "user"
+  },
+  {
+    id: "u_mira",
+    username: "mira",
+    displayName: "mira",
+    role: "user"
   }
+];
 
-  async function handleAuthSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    setAuthError(null);
-    try {
-      const username = authUsername.trim();
-      const password = authPassword.trim();
-      if (!username || !password) {
-        setAuthError("Username and password required");
-        return;
-      }
-
-      const res =
-        authMode === "login"
-          ? await api.login(username, password)
-          : await api.register(username, password);
-
-      if (!rememberMe) {
-        // using same token, but you could switch to sessionStorage
-      }
-
-      setToken(res.token);
-      setUser(res.user);
-
-      setProfile((prev) => ({
-        ...prev,
-        displayName: prev.displayName || res.user.username,
-        customUsername: prev.customUsername || res.user.username
-      }));
-    } catch (err: any) {
-      setAuthError(err?.error || "auth_failed");
-    }
+const initialChats: Chat[] = [
+  {
+    id: "c_server_general",
+    name: "general",
+    kind: "server",
+    members: initialUsers.map(u => u.id)
+  },
+  {
+    id: "c_dm_alex",
+    name: "alex",
+    kind: "dm",
+    members: ["u_cloudz", "u_alex"]
+  },
+  {
+    id: "c_group_build",
+    name: "build-squad",
+    kind: "group",
+    members: ["u_cloudz", "u_alex", "u_mira"]
   }
+];
 
-  async function handleSend(e: React.FormEvent) {
-    e.preventDefault();
-    if (!activeChatId || !inputValue.trim()) return;
-    const content = inputValue.trim();
-    setInputValue("");
-    await api.sendMessage(activeChatId, content);
-  }
+let messageCounter = 1;
 
-  async function handleAddFriendSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    setAddFriendError(null);
-    setAddFriendSuccess(null);
-    const name = addFriendName.trim();
-    if (!name) {
-      setAddFriendError("Enter a username");
-      return;
-    }
-    try {
-      // Assumes you have api.addFriend(username) in your api.ts
-      await api.addFriend(name);
-      setAddFriendSuccess(`Friend request sent to ${name}`);
-      setAddFriendName("");
-      await refreshFriends();
-    } catch (err: any) {
-      setAddFriendError(err?.error || "failed to add friend");
-    }
+const initialMessages: Message[] = [
+  {
+    id: `m_${messageCounter++}`,
+    chatId: "c_server_general",
+    senderId: "u_alex",
+    senderUsername: "alex",
+    senderDisplayName: "alex",
+    senderRole: "user",
+    content: "Welcome to CloudNET.",
+    createdAt: Date.now() - 1000 * 60 * 3
+  },
+  {
+    id: `m_${messageCounter++}`,
+    chatId: "c_server_general",
+    senderId: "u_cloudz",
+    senderUsername: "cloudz",
+    senderDisplayName: "cloudz",
+    senderRole: "owner",
+    content: "I own this place. 🛡️",
+    createdAt: Date.now() - 1000 * 60 * 2
+  },
+  {
+    id: `m_${messageCounter++}`,
+    chatId: "c_dm_alex",
+    senderId: "u_alex",
+    senderUsername: "alex",
+    senderDisplayName: "alex",
+    senderRole: "user",
+    content: "Yo, DM test.",
+    createdAt: Date.now() - 1000 * 60
+  },
+  {
+    id: `m_${messageCounter++}`,
+    chatId: "c_group_build",
+    senderId: "u_mira",
+    senderUsername: "mira",
+    senderDisplayName: "mira",
+    senderRole: "user",
+    content: "Group chat vibes.",
+    createdAt: Date.now() - 1000 * 30
   }
+];
+
+// ===== Main layout =====
+
+const CloudNetLayout: React.FC = () => {
+  const theme = defaultTheme;
+  const isMobile = useIsMobile();
+
+  // core state
+  const [users, setUsers] = useState<User[]>(initialUsers);
+  const [chats, setChats] = useState<Chat[]>(initialChats);
+  const [messages, setMessages] = useState<Message[]>(initialMessages);
+
+  const [currentUserId, setCurrentUserId] = useState<string>("u_cloudz");
+  const [activeChatId, setActiveChatId] = useState<string | null>(
+    "c_server_general"
+  );
+  const [viewMode, setViewMode] = useState<ViewMode>("chat"); // "chat" | "home" | "createServer"
+
+  // typing indicator (extra feature)
+  const [draftsByChat, setDraftsByChat] = useState<Record<string, string>>({});
+  const [typingByChat, setTypingByChat] = useState<Record<string, boolean>>({});
+
+  // admin selection
+  const [adminSelectedUserId, setAdminSelectedUserId] = useState<string | null>(
+    null
+  );
+
+  const currentUser = useMemo(
+    () => users.find(u => u.id === currentUserId) || users[0],
+    [users, currentUserId]
+  );
 
   const activeChat = useMemo(
-    () => chats.find((c) => c.id === activeChatId) || null,
+    () => chats.find(c => c.id === activeChatId) || null,
     [chats, activeChatId]
   );
 
-  const effectiveDisplayName = profile.displayName || user?.username || "you";
-  const effectiveUsername = profile.customUsername || user?.username || "you";
+  const messagesForActiveChat = useMemo(
+    () =>
+      activeChatId
+        ? messages
+            .filter(m => m.chatId === activeChatId)
+            .sort((a, b) => a.createdAt - b.createdAt)
+        : [],
+    [messages, activeChatId]
+  );
 
-  function handleSettingsChange<K extends keyof Settings>(
-    key: K,
-    value: Settings[K]
-  ) {
-    setSettings((prev) => ({
-      ...prev,
-      [key]: value
-    }));
-  }
+  const dmAndGroupChats = useMemo(
+    () =>
+      chats.filter(
+        c =>
+          (c.kind === "dm" || c.kind === "group") &&
+          c.members.includes(currentUser.id)
+      ),
+    [chats, currentUser.id]
+  );
 
-  function handleProfileChange<K extends keyof ProfileSettings>(
-    key: K,
-    value: ProfileSettings[K]
-  ) {
-    setProfile((prev) => ({
-      ...prev,
-      [key]: value
-    }));
-  }
+  const serverChats = useMemo(
+    () => chats.filter(c => c.kind === "server"),
+    [chats]
+  );
 
-  async function handlePfpFile(file: File) {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const result = reader.result;
-      if (typeof result === "string") {
-        handleProfileChange("pfpDataUrl", result);
-      }
+  const friends = useMemo(
+    () => users.filter(u => u.id !== currentUser.id),
+    [users, currentUser.id]
+  );
+
+  const isOwner = currentUser.role === "owner";
+
+  // ===== actions =====
+
+  const sendMessage = (chatId: string) => {
+    const draft = draftsByChat[chatId]?.trim();
+    if (!draft) return;
+    const now = Date.now();
+
+    const newMessage: Message = {
+      id: `m_${messageCounter++}`,
+      chatId,
+      senderId: currentUser.id,
+      senderUsername: currentUser.username,
+      senderDisplayName: currentUser.displayName,
+      senderRole: currentUser.role,
+      content: draft,
+      createdAt: now
     };
-    reader.readAsDataURL(file);
-  }
 
-  function handlePfpDrop(e: React.DragEvent<HTMLDivElement>) {
-    e.preventDefault();
-    e.stopPropagation();
-    setPfpDragActive(false);
-    if (!e.dataTransfer.files || e.dataTransfer.files.length === 0) return;
-    const file = e.dataTransfer.files[0];
-    if (!file.type.startsWith("image/")) return;
-    handlePfpFile(file);
-  }
+    setMessages(prev => [...prev, newMessage]);
+    setDraftsByChat(prev => ({ ...prev, [chatId]: "" }));
+    setTypingByChat(prev => ({ ...prev, [chatId]: false }));
+  };
 
-  function handlePfpDragOver(e: React.DragEvent<HTMLDivElement>) {
-    e.preventDefault();
-    e.stopPropagation();
-    setPfpDragActive(true);
-  }
+  const handleDraftChange = (chatId: string, value: string) => {
+    setDraftsByChat(prev => ({ ...prev, [chatId]: value }));
+    setTypingByChat(prev => ({ ...prev, [chatId]: value.trim().length > 0 }));
+  };
 
-  function handlePfpDragLeave(e: React.DragEvent<HTMLDivElement>) {
-    e.preventDefault();
-    e.stopPropagation();
-    setPfpDragActive(false);
-  }
+  const handleDeleteMessage = (messageId: string) => {
+    if (!isOwner) return;
+    setMessages(prev => prev.filter(m => m.id !== messageId));
+  };
 
-  function handlePfpInputChange(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file || !file.type.startsWith("image/")) return;
-    handlePfpFile(file);
-  }
-
-  const fontSize = settings.fontSize;
-  const bubbleRadius = settings.bubbleRadius;
-  const compact = settings.compactMode;
-
-  if (!authChecked) {
-    return (
-      <div
-        style={{
-          display: "flex",
-          height: "100vh",
-          width: "100vw",
-          background: theme.bg,
-          color: theme.text,
-          fontFamily:
-            'system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif',
-          alignItems: "center",
-          justifyContent: "center"
-        }}
-      >
-        <div>Loading...</div>
-      </div>
+  const handleBanUser = (userId: string) => {
+    if (!isOwner) return;
+    setUsers(prev =>
+      prev.map(u =>
+        u.id === userId
+          ? {
+              ...u,
+              banned: true
+            }
+          : u
+      )
     );
-  }
+  };
 
-  if (!user) {
-    return (
-      <div
-        style={{
-          display: "flex",
-          height: "100vh",
-          width: "100vw",
-          background: theme.bg,
-          color: theme.text,
-          fontFamily:
-            'system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif',
-          alignItems: "center",
-          justifyContent: "center"
-        }}
-      >
-        <div
+  const handleKickUser = (userId: string) => {
+    if (!isOwner) return;
+    setUsers(prev =>
+      prev.map(u =>
+        u.id === userId
+          ? {
+              ...u,
+              kicked: true
+            }
+          : u
+      )
+    );
+  };
+
+  const handleResetUsername = (userId: string) => {
+    if (!isOwner) return;
+    setUsers(prev =>
+      prev.map(u =>
+        u.id === userId
+          ? {
+              ...u,
+              username: `user_${u.id.slice(-4)}`,
+              displayName: `user_${u.id.slice(-4)}`
+            }
+          : u
+      )
+    );
+  };
+
+  const handleForceLogout = (userId: string) => {
+    if (!isOwner) return;
+    // local-only: just mark kicked and clear their membership in chats
+    setUsers(prev =>
+      prev.map(u =>
+        u.id === userId
+          ? {
+              ...u,
+              kicked: true
+            }
+          : u
+      )
+    );
+    setChats(prev =>
+      prev.map(c =>
+        c.members.includes(userId)
+          ? {
+              ...c,
+              members: c.members.filter(mId => mId !== userId)
+            }
+          : c
+      )
+    );
+  };
+
+  const handleCopyUsername = async (userId: string) => {
+    const target = users.find(u => u.id === userId);
+    if (!target) return;
+    try {
+      await navigator.clipboard.writeText(target.username);
+    } catch {
+      // ignore
+    }
+  };
+
+  const handleCreateServer = (name: string) => {
+    if (!name.trim()) return;
+    const id = createId("c_server");
+    const newChat: Chat = {
+      id,
+      name: name.trim(),
+      kind: "server",
+      members: users.map(u => u.id)
+    };
+    setChats(prev => [...prev, newChat]);
+    setViewMode("chat");
+    setActiveChatId(id);
+  };
+
+  const handleSwitchToHome = () => {
+    setViewMode("home");
+    setActiveChatId(null);
+  };
+
+  const handleSwitchToCreateServer = () => {
+    setViewMode("createServer");
+    setActiveChatId(null);
+  };
+
+  const handleOpenChat = (chatId: string) => {
+    setViewMode("chat");
+    setActiveChatId(chatId);
+  };
+
+  const handleMobileBackToSidebar = () => {
+    setActiveChatId(null);
+  };
+
+  // ===== Render helpers =====
+
+  const renderOwnerBadge = (role: Role) => {
+    if (role !== "owner") return null;
+    return <span style={ownerBadgeStyle}>OWNER🛡️</span>;
+  };
+
+  const renderRoleTag = (role: Role) => {
+    if (role === "owner") return renderOwnerBadge(role);
+    if (role === "admin")
+      return (
+        <span
           style={{
-            width: 340,
-            padding: 20,
-            borderRadius: 12,
-            background: theme.bgDark,
-            border: `1px solid ${theme.border}`
+            padding: "2px 6px",
+            borderRadius: 4,
+            background: theme.accentSoft,
+            color: theme.accent,
+            fontSize: 10,
+            fontWeight: 700
           }}
         >
-          <div
-            style={{
-              fontSize: 18,
-              fontWeight: 700,
-              marginBottom: 4
-            }}
-          >
-            CloudNET
-          </div>
-          <div
-            style={{
-              fontSize: 13,
-              color: theme.textMuted,
-              marginBottom: 16
-            }}
-          >
-            Sign in to your Cloud
-          </div>
-          <form
-            onSubmit={handleAuthSubmit}
-            style={{ display: "flex", flexDirection: "column", gap: 8 }}
-          >
-            <input
-              style={{
-                borderRadius: 6,
-                border: `1px solid ${theme.border}`,
-                padding: "8px 10px",
-                fontSize: 13,
-                background: theme.bg,
-                color: theme.text
-              }}
-              placeholder="Username"
-              value={authUsername}
-              onChange={(e) => setAuthUsername(e.target.value)}
-            />
-            <input
-              style={{
-                borderRadius: 6,
-                border: `1px solid ${theme.border}`,
-                padding: "8px 10px",
-                fontSize: 13,
-                background: theme.bg,
-                color: theme.text
-              }}
-              type="password"
-              placeholder="Password"
-              value={authPassword}
-              onChange={(e) => setAuthPassword(e.target.value)}
-            />
-            <label
-              style={{
-                display: "flex",
-                alignItems: "center",
-                fontSize: 12,
-                color: theme.textMuted
-              }}
-            >
-              <input
-                type="checkbox"
-                checked={rememberMe}
-                onChange={(e) => setRememberMe(e.target.checked)}
-                style={{ marginRight: 6 }}
-              />
-              <span>Remember Me</span>
-            </label>
-            {authError && (
-              <div style={{ color: "#ff5c5c", fontSize: 12 }}>
-                {authError}
-              </div>
-            )}
-            <button
-              type="submit"
-              style={{
-                marginTop: 4,
-                borderRadius: 6,
-                border: "none",
-                background: theme.accent,
-                color: theme.bgDark,
-                fontWeight: 600,
-                fontSize: 13,
-                padding: "8px 10px",
-                cursor: "pointer"
-              }}
-            >
-              {authMode === "login" ? "Login" : "Create account"}
-            </button>
-          </form>
-          <div
-            style={{
-              marginTop: 12,
-              fontSize: 12,
-              color: theme.textMuted
-            }}
-          >
-            {authMode === "login" ? (
-              <>
-                No account?{" "}
-                <span
-                  style={{
-                    color: theme.accent,
-                    cursor: "pointer",
-                    textDecoration: "underline"
-                  }}
-                  onClick={() => setAuthMode("register")}
-                >
-                  Create one
-                </span>
-              </>
-            ) : (
-              <>
-                Already have an account?{" "}
-                <span
-                  style={{
-                    color: theme.accent,
-                    cursor: "pointer",
-                    textDecoration: "underline"
-                  }}
-                  onClick={() => setAuthMode("login")}
-                >
-                  Login
-                </span>
-              </>
-            )}
-          </div>
-        </div>
-      </div>
-    );
-  }
+          ADMIN
+        </span>
+      );
+    return null;
+  };
+
+  const getUserById = (id: string) => users.find(u => u.id === id) || null;
+
+  const typingActive =
+    activeChatId && typingByChat[activeChatId] && draftsByChat[activeChatId];
+
+  // ===== Layout =====
 
   return (
     <div
       style={{
-        display: "flex",
         height: "100vh",
         width: "100vw",
-        background: theme.bg,
+        background: theme.bgDarker,
         color: theme.text,
-        fontFamily:
-          'system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif',
-        overflow: "hidden",
-        position: "relative"
+        display: "flex",
+        flexDirection: "column",
+        fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, sans-serif"
       }}
     >
-      {!isMobile && (
+      {/* Top app bar */}
+      <div
+        style={{
+          height: 48,
+          background: theme.bgDark,
+          borderBottom: `1px solid ${theme.border}`,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          padding: "0 12px"
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          {/* C button = Home */}
+          <button
+            style={{
+              height: 28,
+              width: 28,
+              borderRadius: 999,
+              border: "none",
+              background:
+                viewMode === "home" ? theme.accentSoft : "transparent",
+              color: theme.text,
+              cursor: "pointer",
+              fontWeight: 700,
+              fontSize: 14
+            }}
+            onClick={handleSwitchToHome}
+          >
+            C
+          </button>
+          {/* + button = Create server */}
+          <button
+            style={{
+              height: 28,
+              width: 28,
+              borderRadius: 999,
+              border: "none",
+              background:
+                viewMode === "createServer" ? theme.accentSoft : "transparent",
+              color: theme.text,
+              cursor: "pointer",
+              fontWeight: 700,
+              fontSize: 18,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center"
+            }}
+            onClick={handleSwitchToCreateServer}
+          >
+            +
+          </button>
+
+          <span
+            style={{
+              fontSize: 13,
+              color: theme.textMuted,
+              marginLeft: 8
+            }}
+          >
+            CloudNET
+          </span>
+        </div>
+
+        {/* current user summary */}
         <div
           style={{
-            width: 72,
-            background: theme.bgDark,
             display: "flex",
-            flexDirection: "column",
             alignItems: "center",
-            paddingTop: 12,
-            gap: 10,
-            borderRight: `1px solid ${theme.border}`
+            gap: 8
           }}
         >
           <div
             style={{
-              width: 40,
-              height: 40,
-              borderRadius: 20,
+              width: 24,
+              height: 24,
+              borderRadius: 999,
               background: theme.accentSoft,
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
+              fontSize: 12,
               fontWeight: 700
             }}
           >
-            C
+            {currentUser.displayName.slice(0, 1).toUpperCase()}
           </div>
-          <div
-            style={{
-              width: 40,
-              height: 40,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              color: theme.text,
-              fontSize: 18,
-              cursor: "pointer",
-              transition: "background 0.15s ease",
-              borderRadius: 16,
-              backgroundColor: theme.accentSoft
-            }}
-          >
-            S
-          </div>
-          <div
-            style={{
-              width: 40,
-              height: 40,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              color: theme.text,
-              fontSize: 18,
-              cursor: "pointer",
-              transition: "background 0.15s ease",
-              borderRadius: 16
-            }}
-          >
-            +
+          <div style={{ display: "flex", flexDirection: "column" }}>
+            <span style={{ fontSize: 12, fontWeight: 600 }}>
+              {currentUser.displayName}
+            </span>
+            <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+              <span
+                style={{
+                  fontSize: 10,
+                  color: theme.textMuted
+                }}
+              >
+                @{currentUser.username}
+              </span>
+              {renderRoleTag(currentUser.role)}
+            </div>
           </div>
         </div>
-      )}
+      </div>
 
+      {/* Main area */}
       <div
         style={{
-          width: isMobile ? "100%" : 260,
-          position: isMobile ? "absolute" : "relative",
-          left: isMobile ? (activeChatId ? "-100%" : "0") : 0,
-          top: 0,
-          height: "100%",
-          transition: isMobile ? "left 0.25s ease" : undefined,
-          zIndex: 20,
-          background: theme.bgLight,
+          flex: 1,
+          minHeight: 0,
           display: "flex",
-          flexDirection: "column",
-          borderRight: `1px solid ${theme.border}`
+          flexDirection: "row",
+          overflow: "hidden"
         }}
       >
+        {/* Left sidebar: servers + chats */}
         <div
           style={{
-            height: 48,
+            width: isMobile ? "100%" : 260,
+            position: isMobile ? "absolute" : "relative",
+            left: isMobile
+              ? activeChatId && viewMode === "chat"
+                ? "-100%"
+                : "0"
+              : 0,
+            top: 0,
+            height: "100%",
+            transition: isMobile ? "left 0.25s ease" : undefined,
+            zIndex: 20,
+            background: theme.bgLight,
             display: "flex",
-            alignItems: "center",
-            padding: "0 12px",
-            borderBottom: `1px solid ${theme.border}`,
-            fontWeight: 600,
-            fontSize: 14,
-            justifyContent: "space-between"
+            flexDirection: "column",
+            borderRight: `1px solid ${theme.border}`
           }}
         >
-          <div style={{ color: theme.text }}>server-1</div>
-          {isMobile && activeChatId && (
-            <button
-              style={{
-                background: "transparent",
-                border: "none",
-                color: theme.textMuted,
-                fontSize: 13,
-                cursor: "pointer"
-              }}
-              onClick={() => setActiveChatId(null)}
-            >
-              Close
-            </button>
-          )}
+          {/* sidebar header */}
+          <div
+            style={{
+              height: 48,
+              display: "flex",
+              alignItems: "center",
+              padding: "0 12px",
+              borderBottom: `1px solid ${theme.border}`,
+              fontWeight: 600,
+              fontSize: 14,
+              justifyContent: "space-between"
+            }}
+          >
+            <div style={{ color: theme.text }}>server-1</div>
+            {isMobile && activeChatId && viewMode === "chat" && (
+              <button
+                style={{
+                  background: "transparent",
+                  border: "none",
+                  color: theme.textMuted,
+                  fontSize: 13,
+                  cursor: "pointer"
+                }}
+                onClick={handleMobileBackToSidebar}
+              >
+                Close
+              </button>
+            )}
+          </div>
+
+          {/* channels / chats */}
+          <div
+            style={{
+              flex: 1,
+              overflowY: "auto",
+              padding: "8px 8px 8px 8px"
+            }}
+          >
+            {/* Server channels */}
+            <section style={{ marginBottom: 16 }}>
+              <div
+                style={{
+                  fontSize: 11,
+                  color: theme.textMuted,
+                  letterSpacing: 0.5,
+                  marginBottom: 6
+                }}
+              >
+                SERVER CHANNELS
+              </div>
+              {serverChats.map(chat => {
+                const isActive =
+                  activeChatId === chat.id && viewMode === "chat";
+                return (
+                  <div
+                    key={chat.id}
+                    onClick={() => handleOpenChat(chat.id)}
+                    style={{
+                      padding: "6px 8px",
+                      borderRadius: 6,
+                      cursor: "pointer",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 6,
+                      background: isActive ? theme.accentSoft : "transparent",
+                      color: isActive ? theme.accent : theme.text
+                    }}
+                  >
+                    <span
+                      style={{
+                        fontSize: 16,
+                        color: theme.textMuted
+                      }}
+                    >
+                      #
+                    </span>
+                    <span
+                      style={{
+                        fontSize: 13,
+                        whiteSpace: "nowrap",
+                        textOverflow: "ellipsis",
+                        overflow: "hidden"
+                      }}
+                    >
+                      {chat.name}
+                    </span>
+                  </div>
+                );
+              })}
+            </section>
+
+            {/* DM & group chats */}
+            <section style={{ marginBottom: 16 }}>
+              <div
+                style={{
+                  fontSize: 11,
+                  color: theme.textMuted,
+                  letterSpacing: 0.5,
+                  marginBottom: 6
+                }}
+              >
+                DIRECT MESSAGES / GROUPS
+              </div>
+              {dmAndGroupChats.map(chat => {
+                const isActive =
+                  activeChatId === chat.id && viewMode === "chat";
+                return (
+                  <div
+                    key={chat.id}
+                    onClick={() => handleOpenChat(chat.id)}
+                    style={{
+                      padding: "6px 8px",
+                      borderRadius: 6,
+                      cursor: "pointer",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 6,
+                      background: isActive ? theme.accentSoft : "transparent",
+                      color: isActive ? theme.accent : theme.text
+                    }}
+                  >
+                    <span
+                      style={{
+                        width: 18,
+                        height: 18,
+                        borderRadius: 999,
+                        background: theme.bgLighter,
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        fontSize: 10
+                      }}
+                    >
+                      {chat.name.slice(0, 1).toUpperCase()}
+                    </span>
+                    <span
+                      style={{
+                        fontSize: 13,
+                        whiteSpace: "nowrap",
+                        textOverflow: "ellipsis",
+                        overflow: "hidden"
+                      }}
+                    >
+                      {chat.name}
+                    </span>
+                  </div>
+                );
+              })}
+            </section>
+          </div>
         </div>
 
+        {/* Center content: Home / CreateServer / Chat */}
         <div
           style={{
             flex: 1,
-            overflowY: "auto",
-            padding: "8px 8px 8px 8px"
+            display: "flex",
+            flexDirection: "column",
+            minWidth: 0,
+            position: "relative"
           }}
         >
-          <section style={{ marginBottom: 16 }}>
+          {/* Top bar for center area */}
+          <div
+            style={{
+              height: 48,
+              background: theme.bgDark,
+              borderBottom: `1px solid ${theme.border}`,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              padding: "0 12px",
+              position: "relative"
+            }}
+          >
             <div
               style={{
-                fontSize: 11,
-                color: theme.textMuted,
-                letterSpacing: 0.5,
-                marginBottom: 6
+                display: "flex",
+                alignItems: "center",
+                gap: 6
               }}
             >
-              TEXT CHANNELS
-            </div>
-            {chats
-              .filter((c) => c.type === "channel")
-              .map((c) => {
-                const active = c.id === activeChatId;
-                return (
-                  <div
-                    key={c.id}
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      padding: compact ? "2px 6px" : "4px 8px",
-                      borderRadius: 6,
-                      fontSize,
-                      cursor: "pointer",
-                      marginBottom: 2,
-                      backgroundColor: active ? theme.accentSoft : "transparent",
-                      color: active ? theme.text : theme.textMuted
-                    }}
-                    onClick={() => setActiveChatId(c.id)}
-                  >
-                    <span style={{ marginRight: 6, opacity: 0.9 }}>#</span>
-                    <span>{c.name || "channel"}</span>
-                    {settings.developerMode && (
-                      <span
-                        style={{
-                          marginLeft: "auto",
-                          fontSize: 10,
-                          opacity: 0.6
-                        }}
-                      >
-                        {c.id}
-                      </span>
-                    )}
-                  </div>
-                );
-              })}
-          </section>
-
-          <section style={{ marginBottom: 16 }}>
-            <div
-              style={{
-                fontSize: 11,
-                color: theme.textMuted,
-                letterSpacing: 0.5,
-                marginBottom: 6
-              }}
-            >
-              DIRECT MESSAGES
-            </div>
-            {chats
-              .filter((c) => c.type === "dm")
-              .map((c) => {
-                const active = c.id === activeChatId;
-                return (
-                  <div
-                    key={c.id}
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      padding: compact ? "2px 6px" : "4px 8px",
-                      borderRadius: 6,
-                      fontSize,
-                      cursor: "pointer",
-                      marginBottom: 2,
-                      backgroundColor: active ? theme.accentSoft : "transparent",
-                      color: active ? theme.text : theme.textMuted
-                    }}
-                    onClick={() => setActiveChatId(c.id)}
-                  >
-                    <span>{c.name || "DM"}</span>
-                    {settings.developerMode && (
-                      <span
-                        style={{
-                          marginLeft: "auto",
-                          fontSize: 10,
-                          opacity: 0.6
-                        }}
-                      >
-                        {c.id}
-                      </span>
-                    )}
-                  </div>
-                );
-              })}
-          </section>
-
-          <section style={{ marginBottom: 16 }}>
-            <div
-              style={{
-                fontSize: 11,
-                color: theme.textMuted,
-                letterSpacing: 0.5,
-                marginBottom: 6
-              }}
-            >
-              GROUP CHATS
-            </div>
-            {chats
-              .filter((c) => c.type === "gc")
-              .map((c) => {
-                const active = c.id === activeChatId;
-                return (
-                  <div
-                    key={c.id}
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      padding: compact ? "2px 6px" : "4px 8px",
-                      borderRadius: 6,
-                      fontSize,
-                      cursor: "pointer",
-                      marginBottom: 2,
-                      backgroundColor: active ? theme.accentSoft : "transparent",
-                      color: active ? theme.text : theme.textMuted
-                    }}
-                    onClick={() => setActiveChatId(c.id)}
-                  >
-                    <span>{c.name || "Group"}</span>
-                    {settings.developerMode && (
-                      <span
-                        style={{
-                          marginLeft: "auto",
-                          fontSize: 10,
-                          opacity: 0.6
-                        }}
-                      >
-                        {c.id}
-                      </span>
-                    )}
-                  </div>
-                );
-              })}
-          </section>
-
-          <section>
-            <div
-              style={{
-                fontSize: 11,
-                color: theme.textMuted,
-                letterSpacing: 0.5,
-                marginBottom: 6
-              }}
-            >
-              FRIENDS
-            </div>
-            {friends.map((f) => (
-              <div
-                key={f.id}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 8,
-                  fontSize,
-                  marginBottom: 4
-                }}
-              >
-                <div
-                  style={{
-                    width: 20,
-                    height: 20,
-                    borderRadius: 999,
-                    background: theme.bgDark,
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    fontSize: 11,
-                    color: theme.textMuted
-                  }}
-                >
-                  {f.username.slice(0, 2).toUpperCase()}
-                </div>
-                <div style={{ color: theme.text }}>{f.username}</div>
-                {settings.developerMode && (
-                  <span
-                    style={{
-                      marginLeft: "auto",
-                      fontSize: 10,
-                      opacity: 0.6
-                    }}
-                  >
-                    {f.id}
-                  </span>
-                )}
-              </div>
-            ))}
-
-            <div style={{ marginTop: 8 }}>
-              {!showAddFriend ? (
+              {/* mobile back button */}
+              {isMobile && activeChatId && viewMode === "chat" && (
                 <button
                   style={{
                     background: "transparent",
                     border: "none",
-                    color: theme.accent,
-                    fontSize: 12,
-                    cursor: "pointer",
-                    padding: 0
+                    color: theme.textMuted,
+                    fontSize: 20,
+                    marginRight: 4,
+                    cursor: "pointer"
                   }}
-                  onClick={() => {
-                    setShowAddFriend(true);
-                    setAddFriendError(null);
-                    setAddFriendSuccess(null);
-                  }}
+                  onClick={handleMobileBackToSidebar}
                 >
-                  + Add Friend
+                  ☰
                 </button>
-              ) : (
-                <form
-                  onSubmit={handleAddFriendSubmit}
+              )}
+
+              {viewMode === "home" && (
+                <>
+                  <span
+                    style={{
+                      fontSize: 16,
+                      fontWeight: 600
+                    }}
+                  >
+                    Home
+                  </span>
+                  <span
+                    style={{
+                      fontSize: 12,
+                      color: theme.textMuted
+                    }}
+                  >
+                    DMs · Groups · Friends
+                  </span>
+                </>
+              )}
+
+              {viewMode === "createServer" && (
+                <>
+                  <span
+                    style={{
+                      fontSize: 16,
+                      fontWeight: 600
+                    }}
+                  >
+                    Create Server
+                  </span>
+                  <span
+                    style={{
+                      fontSize: 12,
+                      color: theme.textMuted
+                    }}
+                  >
+                    Spin up a new realm
+                  </span>
+                </>
+              )}
+
+              {viewMode === "chat" && activeChat && (
+                <>
+                  <span
+                    style={{
+                      fontSize: 18,
+                      color:
+                        activeChat.kind === "server"
+                          ? theme.textMuted
+                          : theme.text
+                    }}
+                  >
+                    {activeChat.kind === "server" ? "#" : ""}
+                  </span>
+                  <span
+                    style={{
+                      fontSize: 14,
+                      fontWeight: 600
+                    }}
+                  >
+                    {activeChat.name}
+                  </span>
+                </>
+              )}
+
+              {viewMode === "chat" && !activeChat && (
+                <span
                   style={{
-                    display: "flex",
-                    flexDirection: "column",
-                    gap: 4,
-                    marginTop: 4
+                    fontSize: 14,
+                    color: theme.textMuted
                   }}
                 >
-                  <input
-                    style={{
-                      borderRadius: 6,
-                      border: `1px solid ${theme.border}`,
-                      padding: "4px 6px",
-                      fontSize: 12,
-                      background: theme.bg,
-                      color: theme.text
-                    }}
-                    placeholder="Enter username"
-                    value={addFriendName}
-                    onChange={(e) =>
-                      setAddFriendName(e.target.value)
-                    }
-                  />
-                  <div
-  style={{
-    display: "flex",
-    alignItems: "center",
-    gap: 6
-  }}
->
-  {isMobile && activeChatId && (
-    <button
-      style={{
-        background: "transparent",
-        border: "none",
-        color: theme.textMuted,
-        fontSize: 20,
-        marginRight: 8,
-        cursor: "pointer"
-      }}
-      onClick={() => setActiveChatId(null)}
-    >
-      ☰
-    </button>
-  )}
-
-  <span
-    style={{
-      fontSize: 18,
-      color: theme.textMuted
-    }}
-  >
-    #
-  </span>
-</div>
-
-                    <button
-                      type="submit"
-                      style={{
-                        borderRadius: 6,
-                        border: "none",
-                        background: theme.accent,
-                        color: theme.bgDark,
-                        fontSize: 12,
-                        padding: "4px 8px",
-                        cursor: "pointer"
-                      }}
-                    >
-                      Add
-                    </button>
-                    <button
-                      type="button"
-                      style={{
-                        borderRadius: 6,
-                        border: "none",
-                        background: "transparent",
-                        color: theme.textMuted,
-                        fontSize: 12,
-                        padding: "4px 6px",
-                        cursor: "pointer"
-                      }}
-                      onClick={() => {
-                        setShowAddFriend(false);
-                        setAddFriendName("");
-                        setAddFriendError(null);
-                        setAddFriendSuccess(null);
-                      }}
-                    >
-                      Cancel
-                    </button>
-                  </div>
-                  {addFriendError && (
-                    <div
-                      style={{
-                        color: "#ff5c5c",
-                        fontSize: 11
-                      }}
-                    >
-                      {addFriendError}
-                    </div>
-                  )}
-                  {addFriendSuccess && (
-                    <div
-                      style={{
-                        color: "#4ade80",
-                        fontSize: 11
-                      }}
-                    >
-                      {addFriendSuccess}
-                    </div>
-                  )}
-                </form>
+                  No chat selected
+                </span>
               )}
             </div>
-          </section>
-        </div>
 
-        <div
-          style={{
-            height: 60,
-            borderTop: `1px solid ${theme.border}`,
-            padding: "0 8px",
-            display: "flex",
-            alignItems: "center"
-          }}
-        >
+            {/* typing indicator */}
+            {viewMode === "chat" && typingActive && (
+              <div
+                style={{
+                  fontSize: 11,
+                  color: theme.textMuted,
+                  fontStyle: "italic"
+                }}
+              >
+                typing…
+              </div>
+            )}
+          </div>
+
+          {/* Center body */}
           <div
             style={{
+              flex: 1,
               display: "flex",
-              alignItems: "center",
-              gap: 8,
-              width: "100%"
+              minHeight: 0
+            }}
+          >
+            {/* HOME VIEW */}
+            {viewMode === "home" && (
+              <div
+                style={{
+                  flex: 1,
+                  padding: 16,
+                  display: "flex",
+                  flexDirection: isMobile ? "column" : "row",
+                  gap: 16,
+                  background: theme.bgDarker
+                }}
+              >
+                {/* DMs / groups */}
+                <div
+                  style={{
+                    flex: 1,
+                    background: theme.bgLight,
+                    borderRadius: 8,
+                    border: `1px solid ${theme.border}`,
+                    padding: 12,
+                    display: "flex",
+                    flexDirection: "column",
+                    minHeight: 0
+                  }}
+                >
+                  <div
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "center",
+                      marginBottom: 8
+                    }}
+                  >
+                    <span
+                      style={{
+                        fontSize: 13,
+                        fontWeight: 600
+                      }}
+                    >
+                      Direct Messages & Groups
+                    </span>
+                  </div>
+                  <div
+                    style={{
+                      flex: 1,
+                      overflowY: "auto",
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: 6
+                    }}
+                  >
+                    {dmAndGroupChats.map(chat => (
+                      <div
+                        key={chat.id}
+                        onClick={() => handleOpenChat(chat.id)}
+                        style={{
+                          padding: "8px 10px",
+                          borderRadius: 6,
+                          cursor: "pointer",
+                          background: theme.bgLighter,
+                          border: `1px solid ${theme.border}`,
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 8
+                        }}
+                      >
+                        <div
+                          style={{
+                            width: 28,
+                            height: 28,
+                            borderRadius: 999,
+                            background: theme.accentSoft,
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            fontSize: 13,
+                            fontWeight: 700
+                          }}
+                        >
+                          {chat.name.slice(0, 1).toUpperCase()}
+                        </div>
+                        <div
+                          style={{
+                            display: "flex",
+                            flexDirection: "column",
+                            minWidth: 0
+                          }}
+                        >
+                          <span
+                            style={{
+                              fontSize: 13,
+                              fontWeight: 500,
+                              whiteSpace: "nowrap",
+                              textOverflow: "ellipsis",
+                              overflow: "hidden"
+                            }}
+                          >
+                            {chat.name}
+                          </span>
+                          <span
+                            style={{
+                              fontSize: 11,
+                              color: theme.textMuted
+                            }}
+                          >
+                            {chat.kind === "dm"
+                              ? "Direct Message"
+                              : "Group Chat"}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                    {dmAndGroupChats.length === 0 && (
+                      <div
+                        style={{
+                          fontSize: 12,
+                          color: theme.textMuted
+                        }}
+                      >
+                        No DMs yet. Touch grass or DM someone.
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Friends */}
+                <div
+                  style={{
+                    width: isMobile ? "100%" : 260,
+                    background: theme.bgLight,
+                    borderRadius: 8,
+                    border: `1px solid ${theme.border}`,
+                    padding: 12,
+                    display: "flex",
+                    flexDirection: "column"
+                  }}
+                >
+                  <div
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "center",
+                      marginBottom: 8
+                    }}
+                  >
+                    <span
+                      style={{
+                        fontSize: 13,
+                        fontWeight: 600
+                      }}
+                    >
+                      Friends
+                    </span>
+                  </div>
+                  <div
+                    style={{
+                      flex: 1,
+                      overflowY: "auto",
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: 6
+                    }}
+                  >
+                    {friends.map(friend => (
+                      <div
+                        key={friend.id}
+                        style={{
+                          padding: "6px 8px",
+                          borderRadius: 6,
+                          background: theme.bgLighter,
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "space-between",
+                          gap: 8
+                        }}
+                      >
+                        <div
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 8
+                          }}
+                        >
+                          <div
+                            style={{
+                              width: 22,
+                              height: 22,
+                              borderRadius: 999,
+                              background: theme.accentSoft,
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                              fontSize: 11
+                            }}
+                          >
+                            {friend.displayName.slice(0, 1).toUpperCase()}
+                          </div>
+                          <div
+                            style={{
+                              display: "flex",
+                              flexDirection: "column"
+                            }}
+                          >
+                            <span
+                              style={{
+                                fontSize: 12,
+                                fontWeight: 500
+                              }}
+                            >
+                              {friend.displayName}
+                            </span>
+                            <span
+                              style={{
+                                fontSize: 10,
+                                color: theme.textMuted
+                              }}
+                            >
+                              @{friend.username}
+                            </span>
+                          </div>
+                        </div>
+                        <button
+                          style={{
+                            fontSize: 10,
+                            padding: "4px 6px",
+                            borderRadius: 4,
+                            border: "none",
+                            background: theme.accentSoft,
+                            color: theme.accent,
+                            cursor: "pointer"
+                          }}
+                          onClick={() => {
+                            const dmExisting = chats.find(
+                              c =>
+                                c.kind === "dm" &&
+                                c.members.includes(currentUser.id) &&
+                                c.members.includes(friend.id)
+                            );
+                            if (dmExisting) {
+                              handleOpenChat(dmExisting.id);
+                            } else {
+                              const id = createId("c_dm");
+                              const newChat: Chat = {
+                                id,
+                                name: friend.displayName,
+                                kind: "dm",
+                                members: [currentUser.id, friend.id]
+                              };
+                              setChats(prev => [...prev, newChat]);
+                              handleOpenChat(id);
+                            }
+                          }}
+                        >
+                          Message
+                        </button>
+                      </div>
+                    ))}
+                    {friends.length === 0 && (
+                      <div
+                        style={{
+                          fontSize: 12,
+                          color: theme.textMuted
+                        }}
+                      >
+                        Forever alone mode enabled.
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* CREATE SERVER VIEW */}
+            {viewMode === "createServer" && (
+              <CreateServerView
+                theme={theme}
+                onCreate={handleCreateServer}
+              />
+            )}
+
+            {/* CHAT VIEW */}
+            {viewMode === "chat" && (
+              <div
+                style={{
+                  flex: 1,
+                  display: activeChat ? "flex" : "flex",
+                  flexDirection: "column",
+                  background: theme.bgDarker
+                }}
+              >
+                {!activeChat && (
+                  <div
+                    style={{
+                      flex: 1,
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      color: theme.textMuted,
+                      fontSize: 13
+                    }}
+                  >
+                    Pick something on the left.
+                  </div>
+                )}
+
+                {activeChat && (
+                  <>
+                    {/* messages list */}
+                    <div
+                      style={{
+                        flex: 1,
+                        overflowY: "auto",
+                        padding: "12px 16px",
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: 8
+                      }}
+                    >
+                      {messagesForActiveChat.map(msg => {
+                        const sender = getUserById(msg.senderId);
+                        const isSelf = msg.senderId === currentUser.id;
+                        const effectiveName =
+                          msg.senderDisplayName || msg.senderUsername;
+
+                        return (
+                          <div
+                            key={msg.id}
+                            style={{
+                              display: "flex",
+                              flexDirection: "column",
+                              alignItems: "flex-start"
+                            }}
+                          >
+                            <div
+                              style={{
+                                display: "flex",
+                                alignItems: "center",
+                                gap: 6,
+                                marginBottom: 2
+                              }}
+                            >
+                              <span
+                                style={{
+                                  fontSize: 12,
+                                  fontWeight: 600
+                                }}
+                              >
+                                {effectiveName}
+                              </span>
+                              {renderRoleTag(msg.senderRole)}
+                              {sender?.banned && (
+                                <span
+                                  style={{
+                                    fontSize: 10,
+                                    color: theme.danger
+                                  }}
+                                >
+                                  (banned)
+                                </span>
+                              )}
+                            </div>
+
+                            <div
+                              style={{
+                                background: isSelf
+                                  ? theme.accentSoft
+                                  : theme.bgLight,
+                                borderRadius: 8,
+                                padding: "6px 10px",
+                                fontSize: 13,
+                                color: isSelf ? theme.accent : theme.text,
+                                display: "inline-flex",
+                                maxWidth: "80%",
+                                position: "relative"
+                              }}
+                            >
+                              <span>{msg.content}</span>
+
+                              {isOwner && (
+                                <button
+                                  onClick={() => handleDeleteMessage(msg.id)}
+                                  style={{
+                                    border: "none",
+                                    background: "transparent",
+                                    color: theme.textMuted,
+                                    cursor: "pointer",
+                                    fontSize: 10,
+                                    marginLeft: 8
+                                  }}
+                                >
+                                  ✕
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+
+                      {messagesForActiveChat.length === 0 && (
+                        <div
+                          style={{
+                            fontSize: 12,
+                            color: theme.textMuted
+                          }}
+                        >
+                          No messages yet. Be the chaos.
+                        </div>
+                      )}
+                    </div>
+
+                    {/* input + typing indicator bubble */}
+                    {activeChat && (
+                      <div
+                        style={{
+                          padding: 10,
+                          borderTop: `1px solid ${theme.border}`,
+                          background: theme.bgDark,
+                          display: "flex",
+                          flexDirection: "column",
+                          gap: 6
+                        }}
+                      >
+                        {typingActive && (
+                          <div
+                            style={{
+                              fontSize: 11,
+                              color: theme.textMuted
+                            }}
+                          >
+                            You are typing…
+                          </div>
+                        )}
+                        <div
+                          style={{
+                            display: "flex",
+                            gap: 8
+                          }}
+                        >
+                          <input
+                            value={draftsByChat[activeChat.id] || ""}
+                            onChange={e =>
+                              handleDraftChange(activeChat.id, e.target.value)
+                            }
+                            onKeyDown={e => {
+                              if (
+                                e.key === "Enter" &&
+                                !e.shiftKey &&
+                                !e.altKey
+                              ) {
+                                e.preventDefault();
+                                sendMessage(activeChat.id);
+                              }
+                            }}
+                            placeholder={`Message ${
+                              activeChat.kind === "server"
+                                ? `#${activeChat.name}`
+                                : activeChat.name
+                            }`}
+                            style={{
+                              flex: 1,
+                              borderRadius: 6,
+                              border: `1px solid ${theme.border}`,
+                              background: theme.bgLight,
+                              color: theme.text,
+                              fontSize: 13,
+                              padding: "6px 8px",
+                              outline: "none"
+                            }}
+                          />
+                          <button
+                            onClick={() => sendMessage(activeChat.id)}
+                            style={{
+                              padding: "0 12px",
+                              borderRadius: 6,
+                              border: "none",
+                              background: theme.accent,
+                              color: "#000",
+                              fontWeight: 600,
+                              cursor: "pointer",
+                              fontSize: 13
+                            }}
+                          >
+                            Send
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Right admin panel (owner only, hidden on mobile) */}
+        {!isMobile && isOwner && (
+          <div
+            style={{
+              width: 260,
+              borderLeft: `1px solid ${theme.border}`,
+              background: theme.bgDark,
+              display: "flex",
+              flexDirection: "column"
             }}
           >
             <div
               style={{
-                width: 32,
-                height: 32,
-                borderRadius: 999,
-                background: theme.bgDark,
+                height: 36,
+                borderBottom: `1px solid ${theme.border}`,
                 display: "flex",
                 alignItems: "center",
-                justifyContent: "center",
-                overflow: "hidden"
+                padding: "0 10px",
+                fontSize: 12,
+                fontWeight: 600
               }}
             >
-              {profile.pfpDataUrl ? (
-                <img
-                  src={profile.pfpDataUrl}
-                  alt="pfp"
-                  style={{
-                    width: "100%",
-                    height: "100%",
-                    objectFit: "cover"
-                  }}
-                />
-              ) : (
-                <span
-                  style={{
-                    fontSize: 13,
-                    color: theme.textMuted
-                  }}
-                >
-                  {effectiveDisplayName.slice(0, 1).toUpperCase()}
-                </span>
-              )}
+              Owner Control
             </div>
             <div
               style={{
+                flex: 1,
+                overflowY: "auto",
+                padding: 8,
                 display: "flex",
                 flexDirection: "column",
-                fontSize: 12
+                gap: 6
               }}
             >
-              <div style={{ color: theme.text }}>
-                {effectiveDisplayName}
-              </div>
-              <div
-                style={{
-                  color: theme.textMuted,
-                  fontSize: 11
-                }}
-              >
-                @{effectiveUsername}
-              </div>
-            </div>
-            <button
-              style={{
-                marginLeft: "auto",
-                background: "transparent",
-                border: "none",
-                color: theme.textMuted,
-                fontSize: 12,
-                cursor: "pointer"
-              }}
-              onClick={() => setShowSettingsPanel(true)}
-            >
-              ⚙
-            </button>
-          </div>
-        </div>
-      </div>
+              {users.map(u => (
+                <div
+                  key={u.id}
+                  style={{
+                    borderRadius: 6,
+                    border: `1px solid ${theme.border}`,
+                    background:
+                      adminSelectedUserId === u.id
+                        ? theme.bgLighter
+                        : theme.bgDark,
+                    padding: 8,
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 4
+                  }}
+                >
+                  <div
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "center"
+                    }}
+                  >
+                    <div
+                      style={{
+                        display: "flex",
+                        flexDirection: "column"
+                      }}
+                    >
+                      <span
+                        style={{
+                          fontSize: 12,
+                          fontWeight: 600
+                        }}
+                      >
+                        {u.displayName}{" "}
+                        {u.role === "owner" && (
+                          <span style={{ ...ownerBadgeStyle, fontSize: 9 }}>
+                            OWNER🛡️
+                          </span>
+                        )}
+                      </span>
+                      <span
+                        style={{
+                          fontSize: 10,
+                          color: theme.textMuted
+                        }}
+                      >
+                        @{u.username}
+                      </span>
+                    </div>
+                    <button
+                      style={{
+                        border: "none",
+                        background: "transparent",
+                        color: theme.textMuted,
+                        cursor: "pointer",
+                        fontSize: 10
+                      }}
+                      onClick={() =>
+                        setAdminSelectedUserId(prev =>
+                          prev === u.id ? null : u.id
+                        )
+                      }
+                    >
+                      {adminSelectedUserId === u.id ? "Hide" : "Tools"}
+                    </button>
+                  </div>
 
+                  {adminSelectedUserId === u.id && (
+                    <div
+                      style={{
+                        display: "flex",
+                        flexWrap: "wrap",
+                        gap: 4,
+                        marginTop: 4
+                      }}
+                    >
+                      <button
+                        style={adminButtonStyle(theme)}
+                        onClick={() => handleCopyUsername(u.id)}
+                      >
+                        Copy Username
+                      </button>
+                      {u.id !== currentUser.id && (
+                        <>
+                          <button
+                            style={adminButtonStyle(theme)}
+                            onClick={() => handleBanUser(u.id)}
+                          >
+                            Ban
+                          </button>
+                          <button
+                            style={adminButtonStyle(theme)}
+                            onClick={() => handleKickUser(u.id)}
+                          >
+                            Kick
+                          </button>
+                          <button
+                            style={adminButtonStyle(theme)}
+                            onClick={() => handleResetUsername(u.id)}
+                          >
+                            Reset Name
+                          </button>
+                          <button
+                            style={adminButtonStyle(theme)}
+                            onClick={() => handleForceLogout(u.id)}
+                          >
+                            Force Logout
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  )}
+
+                  {(u.banned || u.kicked) && (
+                    <div
+                      style={{
+                        fontSize: 10,
+                        color: theme.danger
+                      }}
+                    >
+                      {u.banned && "Banned. "}
+                      {u.kicked && "Kicked. "}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+// ===== Small components / helpers =====
+
+const adminButtonStyle = (theme: Theme): React.CSSProperties => ({
+  fontSize: 10,
+  padding: "3px 6px",
+  borderRadius: 4,
+  border: "none",
+  background: theme.bgLighter,
+  color: theme.text,
+  cursor: "pointer"
+});
+
+const CreateServerView: React.FC<{
+  theme: Theme;
+  onCreate: (name: string) => void;
+}> = ({ theme, onCreate }) => {
+  const [name, setName] = useState("");
+
+  return (
+    <div
+      style={{
+        flex: 1,
+        padding: 16,
+        background: theme.bgDarker,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center"
+      }}
+    >
       <div
         style={{
-          flex: 1,
+          width: 360,
+          maxWidth: "100%",
+          background: theme.bgLight,
+          borderRadius: 10,
+          border: `1px solid ${theme.border}`,
+          padding: 16,
           display: "flex",
           flexDirection: "column",
-          minWidth: 0
+          gap: 10
         }}
       >
         <div
           style={{
-            height: 48,
-            background: theme.bgDark,
-            borderBottom: `1px solid ${theme.border}`,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            padding: "0 12px"
+            fontSize: 16,
+            fontWeight: 600
           }}
         >
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 6
-            }}
-          >
-            {isMobile && !activeChatId && (
-              <button
-                style={{
-                  background: "transparent",
-                  border: "none",
-                  color: theme.textMuted,
-                  fontSize: 18,
-                  marginRight: 4,
-                  cursor: "pointer"
-                }}
-                onClick={() => setActiveChatId(activeChatId || chats[0]?.id)}
-              >
-                ☰
-              </button>
-            )}
-            <span
-              style={{
-                fontSize: 18,
-                color: theme.textMuted
-              }}
-            >
-              #
-            </span>
-            <span
-              style={{
-                fontSize: 15,
-                fontWeight: 600
-              }}
-            >
-              {activeChat
-                ? activeChat.name || activeChat.id
-                : "Select a chat"}
-            </span>
-          </div>
-          {!isMobile && (
-            <div
-              style={{
-                display: "flex",
-                gap: 8
-              }}
-            >
-              <button
-                style={{
-                  background: theme.bgLight,
-                  border: `1px solid ${theme.border}`,
-                  borderRadius: 6,
-                  padding: "4px 8px",
-                  fontSize: 12,
-                  color: theme.textMuted,
-                  cursor: "pointer"
-                }}
-                onClick={() =>
-                  setShowCloudZaiPanel((v) => !v)
-                }
-              >
-                CloudZAI {showCloudZaiPanel ? "▾" : "▸"}
-              </button>
-              <button
-                style={{
-                  background: theme.bgLight,
-                  border: `1px solid ${theme.border}`,
-                  borderRadius: 6,
-                  padding: "4px 8px",
-                  fontSize: 12,
-                  color: theme.textMuted,
-                  cursor: "pointer"
-                }}
-                onClick={() =>
-                  setShowConsolePanel((v) => !v)
-                }
-              >
-                Console {showConsolePanel ? "▾" : "▸"}
-              </button>
-              <button
-                style={{
-                  background: theme.bgLight,
-                  border: `1px solid ${theme.border}`,
-                  borderRadius: 6,
-                  padding: "4px 8px",
-                  fontSize: 12,
-                  color: theme.textMuted,
-                  cursor: "pointer"
-                }}
-                onClick={() =>
-                  setShowSettingsPanel((v) => !v)
-                }
-              >
-                Settings
-              </button>
-            </div>
-          )}
+          Create a new server
         </div>
-
         <div
           style={{
-            flex: 1,
-            display: "flex",
-            flexDirection: "column",
-            background: theme.bgChat,
-            position: "relative"
+            fontSize: 12,
+            color: theme.textMuted
           }}
         >
-          <div
-            style={{
-              flex: 1,
-              padding: compact ? "8px 10px" : "12px 16px",
-              overflowY: "auto",
-              display: "flex",
-              flexDirection: "column",
-              gap: compact ? 4 : 8
-            }}
-            className="messages-pane"
-          >
-            {messages.map((m) => (
-              <div
-                key={m.id}
-                style={{
-                  display: "flex",
-                  flexDirection: "column"
-                }}
-              >
-                <div
-                  style={{
-                    display: "flex",
-                    alignItems: "baseline",
-                    gap: 6,
-                    fontSize: Math.max(10, fontSize - 2)
-                  }}
-                >
-                  <span
-                    style={{
-                      fontWeight: 600
-                    }}
-                  >
-                    {m.senderId === user.id
-                      ? effectiveDisplayName
-                      : m.senderId}
-                  </span>
-                  <span
-                    style={{
-                      fontSize: Math.max(9, fontSize - 3),
-                      color: theme.textMuted
-                    }}
-                  >
-                    {new Date(
-                      m.createdAt
-                    ).toLocaleTimeString()}
-                  </span>
-                  {settings.developerMode && (
-                    <span
-                      style={{
-                        fontSize: 9,
-                        color: theme.textMuted
-                      }}
-                    >
-                      {m.id}
-                    </span>
-                  )}
-                </div>
-                <div
-                  style={{
-                    marginTop: 2,
-                    background: theme.bgLight,
-                    borderRadius: bubbleRadius,
-                    padding: compact ? "4px 8px" : "6px 10px",
-                    fontSize
-                  }}
-                >
-                  {m.content}
-                </div>
-              </div>
-            ))}
-          </div>
-          <form
-            style={{
-              padding: "8px 12px",
-              borderTop: `1px solid ${theme.border}`,
-              background: theme.bgDark,
-              paddingBottom: isMobile ? 56 : 8
-            }}
-            onSubmit={handleSend}
-          >
-            <input
-              style={{
-                width: "100%",
-                borderRadius: 8,
-                border: "none",
-                outline: "none",
-                padding: "8px 10px",
-                background: theme.bgLight,
-                color: theme.text,
-                fontSize
-              }}
-              placeholder={
-                activeChat
-                  ? activeChat.type === "channel"
-                    ? `Message #${activeChat.name || "channel"}`
-                    : `Message ${
-                        activeChat.name || "chat"
-                      }`
-                  : "Select a chat"
-              }
-              value={inputValue}
-              onChange={(e) =>
-                setInputValue(e.target.value)
-              }
-              disabled={!activeChat}
-            />
-          </form>
-
-          {!isMobile && showConsolePanel && (
-            <div
-              style={{
-                borderTop: `1px solid ${theme.border}`,
-                background: theme.bgDark,
-                height: 120,
-                display: "flex",
-                flexDirection: "column"
-              }}
-            >
-              <div
-                style={{
-                  fontSize: 12,
-                  color: theme.textMuted,
-                  padding: "4px 10px"
-                }}
-              >
-                System Console
-              </div>
-              <div
-                style={{
-                  flex: 1,
-                  padding: "0 10px 6px 10px",
-                  overflowY: "auto",
-                  fontSize: 12
-                }}
-              >
-                {presenceLines.map((p) => (
-                  <div
-                    key={p.id}
-                    style={{ color: theme.textMuted }}
-                  >
-                    {p.label}
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {isMobile && (
-            <div
-              style={{
-                height: 52,
-                background: theme.bgDark,
-                borderTop: `1px solid ${theme.border}`,
-                display: "flex",
-                justifyContent: "space-around",
-                alignItems: "center",
-                position: "absolute",
-                bottom: 0,
-                left: 0,
-                right: 0
-              }}
-            >
-              <button
-                style={{
-                  background: "transparent",
-                  border: "none",
-                  color: theme.text,
-                  fontSize: 20,
-                  cursor: "pointer"
-                }}
-                onClick={() => setShowSettingsPanel(true)}
-              >
-                ⚙
-              </button>
-              <button
-                style={{
-                  background: "transparent",
-                  border: "none",
-                  color: theme.text,
-                  fontSize: 20,
-                  cursor: "pointer"
-                }}
-                onClick={() => setActiveChatId(activeChatId || chats[0]?.id)}
-              >
-                💬
-              </button>
-              <button
-                style={{
-                  background: "transparent",
-                  border: "none",
-                  color: theme.text,
-                  fontSize: 20,
-                  cursor: "pointer"
-                }}
-                onClick={() =>
-                  setShowCloudZaiPanel((v) => !v)
-                }
-              >
-                🤖
-              </button>
-            </div>
-          )}
+          Give it a name. You can style the chaos later.
         </div>
+        <input
+          value={name}
+          onChange={e => setName(e.target.value)}
+          placeholder="My epic server"
+          style={{
+            borderRadius: 6,
+            border: `1px solid ${theme.border}`,
+            background: theme.bgDark,
+            color: theme.text,
+            fontSize: 13,
+            padding: "6px 8px",
+            outline: "none"
+          }}
+        />
+        <button
+          style={{
+            marginTop: 4,
+            padding: "6px 10px",
+            borderRadius: 6,
+            border: "none",
+            background: theme.accent,
+            color: "#000",
+            fontWeight: 600,
+            cursor: "pointer",
+            fontSize: 13
+          }}
+          onClick={() => onCreate(name)}
+        >
+          Create
+        </button>
       </div>
-
-      {!isMobile && showCloudZaiPanel && (
-        <div
-          style={{
-            width: 280,
-            background: theme.bgLight,
-            borderLeft: `1px solid ${theme.border}`,
-            display: "flex",
-            flexDirection: "column"
-          }}
-          className="cloudzai-panel"
-        >
-          <div
-            style={{
-              padding: "10px 12px",
-              borderBottom: `1px solid ${theme.border}`,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between"
-            }}
-          >
-            <div>
-              <div
-                style={{
-                  fontSize: 14,
-                  fontWeight: 600
-                }}
-              >
-                CloudZAI
-              </div>
-              <div
-                style={{
-                  fontSize: 12,
-                  color: theme.textMuted
-                }}
-              >
-                Ambient insight layer
-              </div>
-            </div>
-          </div>
-          <div
-            style={{
-              padding: "10px 12px",
-              fontSize: 13,
-              color: theme.textMuted,
-              flex: 1,
-              overflowY: "auto"
-            }}
-          >
-            <p style={{ marginBottom: 8 }}>
-              CloudZAI will skim this channel and surface
-              highlights, patterns, and anomalies in real
-              time.
-            </p>
-            <p style={{ marginBottom: 8 }}>
-              Next update, this panel becomes fully
-              chattable — direct prompts, insights, and
-              commentary woven into your channels.
-            </p>
-            {settings.developerMode && (
-              <p
-                style={{
-                  marginTop: 12,
-                  fontSize: 11,
-                  opacity: 0.8
-                }}
-              >
-                Developer mode: wire this panel to your AI
-                endpoint and stream responses into a message
-                list here.
-              </p>
-            )}
-          </div>
-        </div>
-      )}
-
-      {showSettingsPanel && (
-        <div
-          style={{
-            position: "absolute",
-            top: 0,
-            right: 0,
-            height: "100vh",
-            width: isMobile ? "100%" : 340,
-            background: theme.bgDark,
-            borderLeft: isMobile
-              ? "none"
-              : `1px solid ${theme.border}`,
-            borderTop: isMobile
-              ? `1px solid ${theme.border}`
-              : "none",
-            display: "flex",
-            flexDirection: "column",
-            zIndex: 50
-          }}
-        >
-          <div
-            style={{
-              padding: "10px 12px",
-              borderBottom: `1px solid ${theme.border}`,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between"
-            }}
-          >
-            <div
-              style={{
-                fontSize: 14,
-                fontWeight: 600
-              }}
-            >
-              Settings
-            </div>
-            <button
-              style={{
-                background: "transparent",
-                border: "none",
-                color: theme.textMuted,
-                cursor: "pointer"
-              }}
-              onClick={() => setShowSettingsPanel(false)}
-            >
-              ✕
-            </button>
-          </div>
-          <div
-            style={{
-              flex: 1,
-              overflowY: "auto",
-              padding: "10px 12px",
-              fontSize: 13,
-              color: theme.text
-            }}
-          >
-            <div
-              style={{
-                marginBottom: 12,
-                fontSize: 11,
-                color: theme.textMuted
-              }}
-            >
-              Appearance
-            </div>
-            <div
-              style={{
-                display: "flex",
-                flexDirection: "column",
-                gap: 8,
-                marginBottom: 16
-              }}
-            >
-              <label>
-                Theme preset
-                <select
-                  value={settings.themePreset}
-                  onChange={(e) =>
-                    handleSettingsChange(
-                      "themePreset",
-                      e.target
-                        .value as ThemePreset
-                    )
-                  }
-                  style={{
-                    width: "100%",
-                    marginTop: 4,
-                    background: theme.bg,
-                    color: theme.text,
-                    borderRadius: 6,
-                    border: `1px solid ${theme.border}`,
-                    padding: "4px 6px",
-                    fontSize: 13
-                  }}
-                >
-                  <option value="cloudz">CloudZ</option>
-                  <option value="discord">
-                    Discord Dark
-                  </option>
-                  <option value="midnight">
-                    Midnight
-                  </option>
-                  <option value="terminal">
-                    Terminal Green
-                  </option>
-                  <option value="vapor">
-                    Vaporwave
-                  </option>
-                </select>
-              </label>
-              <label
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  gap: 8
-                }}
-              >
-                <span>Accent</span>
-                <input
-                  type="color"
-                  value={settings.customAccent}
-                  onChange={(e) =>
-                    handleSettingsChange(
-                      "customAccent",
-                      e.target.value
-                    )
-                  }
-                />
-              </label>
-              <label
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  gap: 8
-                }}
-              >
-                <span>Background</span>
-                <input
-                  type="color"
-                  value={settings.customBg}
-                  onChange={(e) =>
-                    handleSettingsChange(
-                      "customBg",
-                      e.target.value
-                    )
-                  }
-                />
-              </label>
-              <label
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  gap: 8
-                }}
-              >
-                <span>Sidebar</span>
-                <input
-                  type="color"
-                  value={settings.customBgLight}
-                  onChange={(e) =>
-                    handleSettingsChange(
-                      "customBgLight",
-                      e.target.value
-                    )
-                  }
-                />
-              </label>
-              <label
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  gap: 8
-                }}
-              >
-                <span>Chat</span>
-                <input
-                  type="color"
-                  value={settings.customBgChat}
-                  onChange={(e) =>
-                    handleSettingsChange(
-                      "customBgChat",
-                      e.target.value
-                    )
-                  }
-                />
-              </label>
-              <label>
-                Font size ({settings.fontSize}px)
-                <input
-                  type="range"
-                  min={11}
-                  max={18}
-                  value={settings.fontSize}
-                  onChange={(e) =>
-                    handleSettingsChange(
-                      "fontSize",
-                      Number(e.target.value)
-                    )
-                  }
-                  style={{ width: "100%" }}
-                />
-              </label>
-              <label>
-                Bubble radius ({settings.bubbleRadius}px)
-                <input
-                  type="range"
-                  min={0}
-                  max={16}
-                  value={settings.bubbleRadius}
-                  onChange={(e) =>
-                    handleSettingsChange(
-                      "bubbleRadius",
-                      Number(e.target.value)
-                    )
-                  }
-                  style={{ width: "100%" }}
-                />
-              </label>
-              <label
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 6
-                }}
-              >
-                <input
-                  type="checkbox"
-                  checked={settings.compactMode}
-                  onChange={(e) =>
-                    handleSettingsChange(
-                      "compactMode",
-                      e.target.checked
-                    )
-                  }
-                />
-                <span>Compact mode</span>
-              </label>
-              <label
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 6
-                }}
-              >
-                <input
-                  type="checkbox"
-                  checked={settings.highContrast}
-                  onChange={(e) =>
-                    handleSettingsChange(
-                      "highContrast",
-                      e.target.checked
-                    )
-                  }
-                />
-                <span>High contrast</span>
-              </label>
-              <label
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 6
-                }}
-              >
-                <input
-                  type="checkbox"
-                  checked={settings.reducedMotion}
-                  onChange={(e) =>
-                    handleSettingsChange(
-                      "reducedMotion",
-                      e.target.checked
-                    )
-                  }
-                />
-                <span>Reduced motion</span>
-              </label>
-            </div>
-
-            <div
-              style={{
-                marginBottom: 12,
-                fontSize: 11,
-                color: theme.textMuted
-              }}
-            >
-              Profile
-            </div>
-            <div
-              style={{
-                display: "flex",
-                flexDirection: "column",
-                gap: 8,
-                marginBottom: 16
-              }}
-            >
-              <label>
-                Display name
-                <input
-                  style={{
-                    width: "100%",
-                    marginTop: 4,
-                    background: theme.bg,
-                    color: theme.text,
-                    borderRadius: 6,
-                    border: `1px solid ${theme.border}`,
-                    padding: "4px 6px",
-                    fontSize: 13
-                  }}
-                  value={profile.displayName}
-                  onChange={(e) =>
-                    handleProfileChange(
-                      "displayName",
-                      e.target.value
-                    )
-                  }
-                />
-              </label>
-              <label>
-                Username (local label)
-                <input
-                  style={{
-                    width: "100%",
-                    marginTop: 4,
-                    background: theme.bg,
-                    color: theme.text,
-                    borderRadius: 6,
-                    border: `1px solid ${theme.border}`,
-                    padding: "4px 6px",
-                    fontSize: 13
-                  }}
-                  value={profile.customUsername}
-                  onChange={(e) =>
-                    handleProfileChange(
-                      "customUsername",
-                      e.target.value
-                    )
-                  }
-                />
-              </label>
-              <div>
-                <div
-                  style={{
-                    marginBottom: 4
-                  }}
-                >
-                  Profile picture
-                </div>
-                <div
-                  onDrop={handlePfpDrop}
-                  onDragOver={handlePfpDragOver}
-                  onDragLeave={handlePfpDragLeave}
-                  style={{
-                    borderRadius: 8,
-                    border: `1px dashed ${theme.border}`,
-                    padding: 10,
-                    textAlign: "center",
-                    fontSize: 12,
-                    color: theme.textMuted,
-                    marginBottom: 8,
-                    background: pfpDragActive
-                      ? theme.accentSoft
-                      : "transparent",
-                    cursor: "pointer"
-                  }}
-                >
-                  <div style={{ marginBottom: 6 }}>
-                    Drag image here or click to upload
-                  </div>
-                  <input
-                    type="file"
-                    accept="image/*"
-                    onChange={handlePfpInputChange}
-                    style={{ display: "none" }}
-                    id="pfp-input"
-                  />
-                  <label
-                    htmlFor="pfp-input"
-                    style={{
-                      display: "inline-block",
-                      padding: "4px 8px",
-                      borderRadius: 6,
-                      border: `1px solid ${theme.border}`,
-                      background: theme.bgLight,
-                      color: theme.text,
-                      cursor: "pointer"
-                    }}
-                  >
-                    Choose file
-                  </label>
-                </div>
-                {profile.pfpDataUrl && (
-                  <div
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 8
-                    }}
-                  >
-                    <div
-                      style={{
-                        width: 40,
-                        height: 40,
-                        borderRadius: 999,
-                        overflow: "hidden"
-                      }}
-                    >
-                      <img
-                        src={profile.pfpDataUrl}
-                        alt="pfp-prev"
-                        style={{
-                          width: "100%",
-                          height: "100%",
-                          objectFit: "cover"
-                        }}
-                      />
-                    </div>
-                    <button
-                      style={{
-                        background: "transparent",
-                        border: "none",
-                        color: theme.textMuted,
-                        fontSize: 12,
-                        cursor: "pointer"
-                      }}
-                      onClick={() =>
-                        handleProfileChange(
-                          "pfpDataUrl",
-                          null
-                        )
-                      }
-                    >
-                      Remove
-                    </button>
-                  </div>
-                )}
-              </div>
-            </div>
-
-            <div
-              style={{
-                marginBottom: 12,
-                fontSize: 11,
-                color: theme.textMuted
-              }}
-            >
-              Behavior
-            </div>
-            <div
-              style={{
-                display: "flex",
-                flexDirection: "column",
-                gap: 8,
-                marginBottom: 16
-              }}
-            >
-              <label
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 6
-                }}
-              >
-                <input
-                  type="checkbox"
-                  checked={showCloudZaiPanel}
-                  onChange={(e) =>
-                    setShowCloudZaiPanel(e.target.checked)
-                  }
-                />
-                <span>CloudZAI panel visible</span>
-              </label>
-              <label
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 6
-                }}
-              >
-                <input
-                  type="checkbox"
-                  checked={showConsolePanel}
-                  onChange={(e) =>
-                    setShowConsolePanel(
-                      e.target.checked
-                    )
-                  }
-                />
-                <span>Console visible</span>
-              </label>
-            </div>
-
-            <div
-              style={{
-                marginBottom: 12,
-                fontSize: 11,
-                color: theme.textMuted
-              }}
-            >
-              Developer
-            </div>
-            <div
-              style={{
-                display: "flex",
-                flexDirection: "column",
-                gap: 8,
-                marginBottom: 16
-              }}
-            >
-              <label
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 6
-                }}
-              >
-                <input
-                  type="checkbox"
-                  checked={settings.developerMode}
-                  onChange={(e) =>
-                    handleSettingsChange(
-                      "developerMode",
-                      e.target.checked
-                    )
-                  }
-                />
-                <span>Developer mode</span>
-              </label>
-            </div>
-
-            <div
-              style={{
-                fontSize: 11,
-                color: theme.textMuted,
-                marginTop: 8
-              }}
-            >
-              Next update: full CloudZAI chat wiring +
-              AI personalities live in this same file.
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 };
+
+export default CloudNetLayout;
