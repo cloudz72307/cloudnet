@@ -4,14 +4,7 @@ export type ChatID = string;
 export interface User {
   id: UserID;
   username: string;
-  password: string; // plain text for now (prototype only)
-  createdAt: string;
-}
-
-export interface FriendRequest {
-  id: string;
-  fromUserId: UserID;
-  toUserId: UserID;
+  password: string;
   createdAt: string;
 }
 
@@ -23,24 +16,26 @@ export interface Message {
   createdAt: string;
 }
 
-export interface ChatBase {
+export interface ChannelChat {
   id: ChatID;
+  type: "channel";
   name: string;
   createdAt: string;
 }
 
-export interface ChannelChat extends ChatBase {
-  type: "channel"; // e.g. #general
-}
-
-export interface DMChat extends ChatBase {
+export interface DMChat {
+  id: ChatID;
   type: "dm";
   userIds: [UserID, UserID];
+  createdAt: string;
 }
 
-export interface GroupChat extends ChatBase {
+export interface GroupChat {
+  id: ChatID;
   type: "gc";
+  name: string;
   memberIds: UserID[];
+  createdAt: string;
 }
 
 export type Chat = ChannelChat | DMChat | GroupChat;
