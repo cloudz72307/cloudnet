@@ -237,6 +237,23 @@ export const CloudNetLayout: React.FC = () => {
 
   const [pfpDragActive, setPfpDragActive] = useState(false);
 
+  const [showAddFriend, setShowAddFriend] = useState(false);
+  const [addFriendName, setAddFriendName] = useState("");
+  const [addFriendError, setAddFriendError] = useState<string | null>(null);
+  const [addFriendSuccess, setAddFriendSuccess] = useState<string | null>(null);
+
+  const [isMobile, setIsMobile] = useState(
+    typeof window !== "undefined" ? window.innerWidth <= 768 : false
+  );
+
+  useEffect(() => {
+    function handleResize() {
+      setIsMobile(window.innerWidth <= 768);
+    }
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, []);
+
   useEffect(() => {
     saveSettings({
       ...settings,
@@ -317,6 +334,16 @@ export const CloudNetLayout: React.FC = () => {
     };
   }, [user, activeChatId]);
 
+  async function refreshFriends() {
+    if (!user) return;
+    try {
+      const res = await api.getFriends();
+      setFriends(res.friends);
+    } catch {
+      // ignore
+    }
+  }
+
   async function handleAuthSubmit(e: React.FormEvent) {
     e.preventDefault();
     setAuthError(null);
@@ -334,7 +361,7 @@ export const CloudNetLayout: React.FC = () => {
           : await api.register(username, password);
 
       if (!rememberMe) {
-        // still using localStorage; could be swapped to session later
+        // using same token, but you could switch to sessionStorage
       }
 
       setToken(res.token);
@@ -356,6 +383,26 @@ export const CloudNetLayout: React.FC = () => {
     const content = inputValue.trim();
     setInputValue("");
     await api.sendMessage(activeChatId, content);
+  }
+
+  async function handleAddFriendSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setAddFriendError(null);
+    setAddFriendSuccess(null);
+    const name = addFriendName.trim();
+    if (!name) {
+      setAddFriendError("Enter a username");
+      return;
+    }
+    try {
+      // Assumes you have api.addFriend(username) in your api.ts
+      await api.addFriend(name);
+      setAddFriendSuccess(`Friend request sent to ${name}`);
+      setAddFriendName("");
+      await refreshFriends();
+    } catch (err: any) {
+      setAddFriendError(err?.error || "failed to add friend");
+    }
   }
 
   const activeChat = useMemo(
@@ -612,73 +659,82 @@ export const CloudNetLayout: React.FC = () => {
         color: theme.text,
         fontFamily:
           'system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif',
-        overflow: "hidden"
+        overflow: "hidden",
+        position: "relative"
       }}
     >
-      <div
-        style={{
-          width: 72,
-          background: theme.bgDark,
-          display: "flex",
-          flexDirection: "column",
-          alignItems: "center",
-          paddingTop: 12,
-          gap: 10,
-          borderRight: `1px solid ${theme.border}`
-        }}
-      >
+      {!isMobile && (
         <div
           style={{
-            width: 40,
-            height: 40,
-            borderRadius: 20,
-            background: theme.accentSoft,
+            width: 72,
+            background: theme.bgDark,
             display: "flex",
+            flexDirection: "column",
             alignItems: "center",
-            justifyContent: "center",
-            fontWeight: 700
+            paddingTop: 12,
+            gap: 10,
+            borderRight: `1px solid ${theme.border}`
           }}
         >
-          C
+          <div
+            style={{
+              width: 40,
+              height: 40,
+              borderRadius: 20,
+              background: theme.accentSoft,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              fontWeight: 700
+            }}
+          >
+            C
+          </div>
+          <div
+            style={{
+              width: 40,
+              height: 40,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              color: theme.text,
+              fontSize: 18,
+              cursor: "pointer",
+              transition: "background 0.15s ease",
+              borderRadius: 16,
+              backgroundColor: theme.accentSoft
+            }}
+          >
+            S
+          </div>
+          <div
+            style={{
+              width: 40,
+              height: 40,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              color: theme.text,
+              fontSize: 18,
+              cursor: "pointer",
+              transition: "background 0.15s ease",
+              borderRadius: 16
+            }}
+          >
+            +
+          </div>
         </div>
-        <div
-          style={{
-            width: 40,
-            height: 40,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            color: theme.text,
-            fontSize: 18,
-            cursor: "pointer",
-            transition: "background 0.15s ease",
-            borderRadius: 16,
-            backgroundColor: theme.accentSoft
-          }}
-        >
-          S
-        </div>
-        <div
-          style={{
-            width: 40,
-            height: 40,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            color: theme.text,
-            fontSize: 18,
-            cursor: "pointer",
-            transition: "background 0.15s ease",
-            borderRadius: 16
-          }}
-        >
-          +
-        </div>
-      </div>
+      )}
 
       <div
         style={{
-          width: 260,
+          width: isMobile ? "100%" : 260,
+          position: isMobile ? "absolute" : "relative",
+          left: isMobile ? (activeChatId ? "-100%" : "0") : 0,
+          top: 0,
+          height: "100%",
+          transition: isMobile ? "left 0.25s ease" : undefined,
+          zIndex: 20,
           background: theme.bgLight,
           display: "flex",
           flexDirection: "column",
@@ -693,10 +749,25 @@ export const CloudNetLayout: React.FC = () => {
             padding: "0 12px",
             borderBottom: `1px solid ${theme.border}`,
             fontWeight: 600,
-            fontSize: 14
+            fontSize: 14,
+            justifyContent: "space-between"
           }}
         >
           <div style={{ color: theme.text }}>server-1</div>
+          {isMobile && activeChatId && (
+            <button
+              style={{
+                background: "transparent",
+                border: "none",
+                color: theme.textMuted,
+                fontSize: 13,
+                cursor: "pointer"
+              }}
+              onClick={() => setActiveChatId(null)}
+            >
+              Close
+            </button>
+          )}
         </div>
 
         <div
@@ -902,6 +973,116 @@ export const CloudNetLayout: React.FC = () => {
                 )}
               </div>
             ))}
+
+            <div style={{ marginTop: 8 }}>
+              {!showAddFriend ? (
+                <button
+                  style={{
+                    background: "transparent",
+                    border: "none",
+                    color: theme.accent,
+                    fontSize: 12,
+                    cursor: "pointer",
+                    padding: 0
+                  }}
+                  onClick={() => {
+                    setShowAddFriend(true);
+                    setAddFriendError(null);
+                    setAddFriendSuccess(null);
+                  }}
+                >
+                  + Add Friend
+                </button>
+              ) : (
+                <form
+                  onSubmit={handleAddFriendSubmit}
+                  style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 4,
+                    marginTop: 4
+                  }}
+                >
+                  <input
+                    style={{
+                      borderRadius: 6,
+                      border: `1px solid ${theme.border}`,
+                      padding: "4px 6px",
+                      fontSize: 12,
+                      background: theme.bg,
+                      color: theme.text
+                    }}
+                    placeholder="Enter username"
+                    value={addFriendName}
+                    onChange={(e) =>
+                      setAddFriendName(e.target.value)
+                    }
+                  />
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 6
+                    }}
+                  >
+                    <button
+                      type="submit"
+                      style={{
+                        borderRadius: 6,
+                        border: "none",
+                        background: theme.accent,
+                        color: theme.bgDark,
+                        fontSize: 12,
+                        padding: "4px 8px",
+                        cursor: "pointer"
+                      }}
+                    >
+                      Add
+                    </button>
+                    <button
+                      type="button"
+                      style={{
+                        borderRadius: 6,
+                        border: "none",
+                        background: "transparent",
+                        color: theme.textMuted,
+                        fontSize: 12,
+                        padding: "4px 6px",
+                        cursor: "pointer"
+                      }}
+                      onClick={() => {
+                        setShowAddFriend(false);
+                        setAddFriendName("");
+                        setAddFriendError(null);
+                        setAddFriendSuccess(null);
+                      }}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                  {addFriendError && (
+                    <div
+                      style={{
+                        color: "#ff5c5c",
+                        fontSize: 11
+                      }}
+                    >
+                      {addFriendError}
+                    </div>
+                  )}
+                  {addFriendSuccess && (
+                    <div
+                      style={{
+                        color: "#4ade80",
+                        fontSize: 11
+                      }}
+                    >
+                      {addFriendSuccess}
+                    </div>
+                  )}
+                </form>
+              )}
+            </div>
           </section>
         </div>
 
@@ -1017,6 +1198,21 @@ export const CloudNetLayout: React.FC = () => {
               gap: 6
             }}
           >
+            {isMobile && !activeChatId && (
+              <button
+                style={{
+                  background: "transparent",
+                  border: "none",
+                  color: theme.textMuted,
+                  fontSize: 18,
+                  marginRight: 4,
+                  cursor: "pointer"
+                }}
+                onClick={() => setActiveChatId(activeChatId || chats[0]?.id)}
+              >
+                ☰
+              </button>
+            )}
             <span
               style={{
                 fontSize: 18,
@@ -1036,61 +1232,63 @@ export const CloudNetLayout: React.FC = () => {
                 : "Select a chat"}
             </span>
           </div>
-          <div
-            style={{
-              display: "flex",
-              gap: 8
-            }}
-          >
-            <button
+          {!isMobile && (
+            <div
               style={{
-                background: theme.bgLight,
-                border: `1px solid ${theme.border}`,
-                borderRadius: 6,
-                padding: "4px 8px",
-                fontSize: 12,
-                color: theme.textMuted,
-                cursor: "pointer"
+                display: "flex",
+                gap: 8
               }}
-              onClick={() =>
-                setShowCloudZaiPanel((v) => !v)
-              }
             >
-              CloudZAI {showCloudZaiPanel ? "▾" : "▸"}
-            </button>
-            <button
-              style={{
-                background: theme.bgLight,
-                border: `1px solid ${theme.border}`,
-                borderRadius: 6,
-                padding: "4px 8px",
-                fontSize: 12,
-                color: theme.textMuted,
-                cursor: "pointer"
-              }}
-              onClick={() =>
-                setShowConsolePanel((v) => !v)
-              }
-            >
-              Console {showConsolePanel ? "▾" : "▸"}
-            </button>
-            <button
-              style={{
-                background: theme.bgLight,
-                border: `1px solid ${theme.border}`,
-                borderRadius: 6,
-                padding: "4px 8px",
-                fontSize: 12,
-                color: theme.textMuted,
-                cursor: "pointer"
-              }}
-              onClick={() =>
-                setShowSettingsPanel((v) => !v)
-              }
-            >
-              Settings
-            </button>
-          </div>
+              <button
+                style={{
+                  background: theme.bgLight,
+                  border: `1px solid ${theme.border}`,
+                  borderRadius: 6,
+                  padding: "4px 8px",
+                  fontSize: 12,
+                  color: theme.textMuted,
+                  cursor: "pointer"
+                }}
+                onClick={() =>
+                  setShowCloudZaiPanel((v) => !v)
+                }
+              >
+                CloudZAI {showCloudZaiPanel ? "▾" : "▸"}
+              </button>
+              <button
+                style={{
+                  background: theme.bgLight,
+                  border: `1px solid ${theme.border}`,
+                  borderRadius: 6,
+                  padding: "4px 8px",
+                  fontSize: 12,
+                  color: theme.textMuted,
+                  cursor: "pointer"
+                }}
+                onClick={() =>
+                  setShowConsolePanel((v) => !v)
+                }
+              >
+                Console {showConsolePanel ? "▾" : "▸"}
+              </button>
+              <button
+                style={{
+                  background: theme.bgLight,
+                  border: `1px solid ${theme.border}`,
+                  borderRadius: 6,
+                  padding: "4px 8px",
+                  fontSize: 12,
+                  color: theme.textMuted,
+                  cursor: "pointer"
+                }}
+                onClick={() =>
+                  setShowSettingsPanel((v) => !v)
+                }
+              >
+                Settings
+              </button>
+            </div>
+          )}
         </div>
 
         <div
@@ -1177,7 +1375,8 @@ export const CloudNetLayout: React.FC = () => {
             style={{
               padding: "8px 12px",
               borderTop: `1px solid ${theme.border}`,
-              background: theme.bgDark
+              background: theme.bgDark,
+              paddingBottom: isMobile ? 56 : 8
             }}
             onSubmit={handleSend}
           >
@@ -1208,7 +1407,8 @@ export const CloudNetLayout: React.FC = () => {
               disabled={!activeChat}
             />
           </form>
-          {showConsolePanel && (
+
+          {!isMobile && showConsolePanel && (
             <div
               style={{
                 borderTop: `1px solid ${theme.border}`,
@@ -1246,10 +1446,66 @@ export const CloudNetLayout: React.FC = () => {
               </div>
             </div>
           )}
+
+          {isMobile && (
+            <div
+              style={{
+                height: 52,
+                background: theme.bgDark,
+                borderTop: `1px solid ${theme.border}`,
+                display: "flex",
+                justifyContent: "space-around",
+                alignItems: "center",
+                position: "absolute",
+                bottom: 0,
+                left: 0,
+                right: 0
+              }}
+            >
+              <button
+                style={{
+                  background: "transparent",
+                  border: "none",
+                  color: theme.text,
+                  fontSize: 20,
+                  cursor: "pointer"
+                }}
+                onClick={() => setShowSettingsPanel(true)}
+              >
+                ⚙
+              </button>
+              <button
+                style={{
+                  background: "transparent",
+                  border: "none",
+                  color: theme.text,
+                  fontSize: 20,
+                  cursor: "pointer"
+                }}
+                onClick={() => setActiveChatId(activeChatId || chats[0]?.id)}
+              >
+                💬
+              </button>
+              <button
+                style={{
+                  background: "transparent",
+                  border: "none",
+                  color: theme.text,
+                  fontSize: 20,
+                  cursor: "pointer"
+                }}
+                onClick={() =>
+                  setShowCloudZaiPanel((v) => !v)
+                }
+              >
+                🤖
+              </button>
+            </div>
+          )}
         </div>
       </div>
 
-      {showCloudZaiPanel && (
+      {!isMobile && showCloudZaiPanel && (
         <div
           style={{
             width: 280,
@@ -1315,9 +1571,9 @@ export const CloudNetLayout: React.FC = () => {
                   opacity: 0.8
                 }}
               >
-                Developer mode: you can wire this panel to
-                your AI endpoint and stream responses into
-                a message list here.
+                Developer mode: wire this panel to your AI
+                endpoint and stream responses into a message
+                list here.
               </p>
             )}
           </div>
@@ -1331,9 +1587,14 @@ export const CloudNetLayout: React.FC = () => {
             top: 0,
             right: 0,
             height: "100vh",
-            width: 340,
+            width: isMobile ? "100%" : 340,
             background: theme.bgDark,
-            borderLeft: `1px solid ${theme.border}`,
+            borderLeft: isMobile
+              ? "none"
+              : `1px solid ${theme.border}`,
+            borderTop: isMobile
+              ? `1px solid ${theme.border}`
+              : "none",
             display: "flex",
             flexDirection: "column",
             zIndex: 50
@@ -1806,7 +2067,9 @@ export const CloudNetLayout: React.FC = () => {
                   type="checkbox"
                   checked={showConsolePanel}
                   onChange={(e) =>
-                    setShowConsolePanel(e.target.checked)
+                    setShowConsolePanel(
+                      e.target.checked
+                    )
                   }
                 />
                 <span>Console visible</span>
