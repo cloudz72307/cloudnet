@@ -7,20 +7,16 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Create HTTP server
 const server = http.createServer(app);
 
-// Create WebSocket server
 const io = new SocketIOServer(server, {
   cors: { origin: "*" }
 });
 
-// Health check
 app.get("/health", (_req, res) => {
   res.json({ status: "ok", time: Date.now() });
 });
 
-// In-memory presence + rooms
 const rooms = new Map<string, Set<string>>();
 
 io.on("connection", (socket) => {
@@ -62,7 +58,6 @@ io.on("connection", (socket) => {
   });
 });
 
-// Start server
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
   console.log(`CloudNET API listening on port ${PORT}`);
