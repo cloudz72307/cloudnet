@@ -1,4 +1,9 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, {
+  useEffect,
+  useMemo,
+  useRef,
+  useState
+} from "react";
 
 // ========= Types =========
 
@@ -88,18 +93,7 @@ const useIsMobile = () => {
 
 // ========= Initial data (no users, safe) =========
 
-let messageCounter = 1;
-
-const initialUsers: User[] = [
-  {
-    id: "u_cloudz",
-    username: "cloudz",
-    displayName: "cloudz",
-    role: "owner",
-    password: "CLOUDZ321479$$"
-  }
-];
-
+const initialUsers: User[] = []; // no default accounts, no personal data
 
 const initialChats: Chat[] = [
   {
@@ -158,7 +152,52 @@ const CloudNetLayout: React.FC = () => {
   const [newPassword, setNewPassword] = useState("");
   const [newAccountError, setNewAccountError] = useState<string | null>(null);
 
-  // admin target
+  // websocket
+  const ws = useRef<WebSocket | null>(null);
+
+  // ========= WebSocket client =========
+
+  useEffect(() => {
+    // Use current origin, just swap http -> ws
+    const wsUrl = window.location.origin.replace(/^http/, "ws");
+
+    const socket = new WebSocket(wsUrl);
+    ws.current = socket;
+
+    socket.onopen = () => {
+      // Optional: console.log("[CloudNET] WebSocket connected");
+    };
+
+    socket.onmessage = event => {
+      try {
+        const msg: Message = JSON.parse(event.data);
+        if (!msg || !msg.id || !msg.chatId) return;
+
+        setMessages(prev => {
+          // avoid duplicate messages if any
+          if (prev.some(m => m.id === msg.id)) return prev;
+          return [...prev, msg];
+        });
+      } catch {
+        // ignore malformed frames
+      }
+    };
+
+    socket.onerror = () => {
+      // Optional: you could show a small "offline" indicator somewhere
+      // console.warn("[CloudNET] WebSocket error");
+    };
+
+    socket.onclose = () => {
+      // Optional: console.log("[CloudNET] WebSocket disconnected");
+    };
+
+    return () => {
+      socket.close();
+    };
+  }, []);
+
+  // admin target (not heavily used yet)
   const [adminSelectedUserId, setAdminSelectedUserId] = useState<string | null>(
     null
   );
@@ -303,6 +342,7 @@ const CloudNetLayout: React.FC = () => {
     setAppMode("app");
     setViewMode("home");
     setActiveChatId("c_server_general");
+    ensureUserInServer(user.id);
   };
 
   const handleLogout = () => {
@@ -337,10 +377,12 @@ const CloudNetLayout: React.FC = () => {
     const raw = draftsByChat[chatId] || "";
     const text = raw.trim();
     if (!text) return;
+    if (!activeChatId || activeChatId !== chatId) return;
+
     const now = Date.now();
 
-    const newMessage: Message = {
-      id: `m_${messageCounter++}`,
+    const msg: Message = {
+      id: `m_${now}_${Math.random().toString(16).slice(2)}`,
       chatId,
       senderId: currentUser.id,
       senderDisplayName: currentUser.displayName,
@@ -349,7 +391,18 @@ const CloudNetLayout: React.FC = () => {
       createdAt: now
     };
 
-    setMessages(prev => [...prev, newMessage]);
+    // send to WebSocket server (it will broadcast to all clients)
+    if (ws.current && ws.current.readyState === WebSocket.OPEN) {
+      try {
+        ws.current.send(JSON.stringify(msg));
+      } catch {
+        // optional: handle send error
+      }
+    } else {
+      // fallback: local-only (so you don't lose message if WS is down)
+      setMessages(prev => [...prev, msg]);
+    }
+
     setDraftsByChat(prev => ({ ...prev, [chatId]: "" }));
     setTypingByChat(prev => ({ ...prev, [chatId]: false }));
   };
@@ -580,7 +633,7 @@ const CloudNetLayout: React.FC = () => {
     const now = Date.now();
     const allChatIds = chats.map(c => c.id);
     const newMessages: Message[] = allChatIds.map(chatId => ({
-      id: `m_${messageCounter++}`,
+      id: `m_${now}_${Math.random().toString(16).slice(2)}`,
       chatId,
       senderId: "system",
       senderDisplayName: "system",
@@ -588,14 +641,22 @@ const CloudNetLayout: React.FC = () => {
       content: "⚡ system ping from owner",
       createdAt: now
     }));
-    setMessages(prev => [...prev, ...newMessages]);
+
+    // broadcast each system message
+    newMessages.forEach(msg => {
+      if (ws.current && ws.current.readyState === WebSocket.OPEN) {
+        ws.current.send(JSON.stringify(msg));
+      } else {
+        setMessages(prev => [...prev, msg]);
+      }
+    });
   };
 
   const handleExplodeChat = () => {
     if (!isOwner || !currentUser || !activeChat) return;
     const now = Date.now();
     const msg: Message = {
-      id: `m_${messageCounter++}`,
+      id: `m_${now}_${Math.random().toString(16).slice(2)}`,
       chatId: activeChat.id,
       senderId: "system",
       senderDisplayName: "system",
@@ -603,7 +664,12 @@ const CloudNetLayout: React.FC = () => {
       content: "💥 chat exploded (visual only) 💥",
       createdAt: now
     };
-    setMessages(prev => [...prev, msg]);
+
+    if (ws.current && ws.current.readyState === WebSocket.OPEN) {
+      ws.current.send(JSON.stringify(msg));
+    } else {
+      setMessages(prev => [...prev, msg]);
+    }
   };
 
   // ========= settings / profile =========
@@ -1065,8 +1131,8 @@ const CloudNetLayout: React.FC = () => {
 
   if (appMode === "login") {
     const account =
-      selectedAccountId &&
-      users.find(u => u.id === selectedAccountId) ||
+      (selectedAccountId &&
+        users.find(u => u.id === selectedAccountId)) ||
       null;
     return (
       <div
