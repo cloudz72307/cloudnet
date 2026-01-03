@@ -1,208 +1,1245 @@
-import React, { useState, useMemo } from "react";
+import React, { useEffect, useMemo, useState } from "react";
+import { api, setToken } from "./api";
+import { getSocket, joinChat, leaveChat } from "./socket";
+import { Chat, Friend, Message, User } from "./types";
 
-type Channel = {
-  id: string;
-  name: string;
+type ThemePreset = "cloudz" | "discord" | "midnight" | "terminal" | "vapor";
+
+type Theme = {
+  bg: string;
+  bgLight: string;
+  bgDark: string;
+  bgChat: string;
+  text: string;
+  textMuted: string;
+  accent: string;
+  accentSoft: string;
+  border: string;
 };
 
-type Message = {
-  id: string;
-  author: string;
-  content: string;
-  timestamp: string;
+type PresenceEntry = { id: string; label: string };
+
+type Settings = {
+  themePreset: ThemePreset;
+  customAccent: string;
+  customBg: string;
+  customBgLight: string;
+  customBgDark: string;
+  customBgChat: string;
+  customText: string;
+  customTextMuted: string;
+  fontSize: number;
+  bubbleRadius: number;
+  compactMode: boolean;
+  highContrast: boolean;
+  reducedMotion: boolean;
+  showCloudZai: boolean;
+  showConsole: boolean;
+  developerMode: boolean;
 };
 
-type PresenceEntry = {
-  id: string;
-  label: string;
+type ProfileSettings = {
+  displayName: string;
+  customUsername: string;
+  pfpDataUrl: string | null;
 };
 
-const theme = {
-  bg: "#1e1f22",
-  bgLight: "#2b2d31",
-  bgDark: "#1a1b1e",
-  bgChat: "#313338",
-  text: "#f2f3f5",
-  textMuted: "#b5bac1",
-  accent: "#00c8ff",
-  accentSoft: "rgba(0, 200, 255, 0.18)",
-  border: "rgba(255,255,255,0.06)"
+const STORAGE_KEYS = {
+  settings: "cloudnet_settings",
+  profile: "cloudnet_profile"
 };
 
-const mockChannels: Channel[] = [
-  { id: "channel-1", name: "channel-1" },
-  { id: "channel-2", name: "channel-2" },
-  { id: "channel-3", name: "channel-3" }
-];
-
-const mockMessages: Record<string, Message[]> = {
-  "channel-1": [
-    {
-      id: "m1",
-      author: "you",
-      content: "Welcome to channel-1",
-      timestamp: "1:00 AM"
-    }
-  ],
-  "channel-2": [
-    { id: "m2", author: "you", content: "neil", timestamp: "1:00:23 AM" },
-    {
-      id: "m3",
-      author: "you",
-      content: "neil say smth",
-      timestamp: "1:00:40 AM"
-    },
-    {
-      id: "m4",
-      author: "you",
-      content: "its cloudzypoo",
-      timestamp: "1:00:42 AM"
-    },
-    { id: "m5", author: "you", content: "e", timestamp: "1:04:03 AM" },
-    { id: "m6", author: "you", content: "loser", timestamp: "1:04:56 AM" },
-    {
-      id: "m7",
-      author: "you",
-      content: "i have to add MOBILE MODE",
-      timestamp: "1:04:59 AM"
-    },
-    {
-      id: "m8",
-      author: "you",
-      content: "JUST FOR YOU",
-      timestamp: "1:05:01 AM"
-    }
-  ],
-  "channel-3": [
-    {
-      id: "m9",
-      author: "you",
-      content: "Quiet in channel-3",
-      timestamp: "1:06 AM"
-    }
-  ]
+const DEFAULT_SETTINGS: Settings = {
+  themePreset: "cloudz",
+  customAccent: "#00c8ff",
+  customBg: "#1e1f22",
+  customBgLight: "#2b2d31",
+  customBgDark: "#1a1b1e",
+  customBgChat: "#313338",
+  customText: "#f2f3f5",
+  customTextMuted: "#b5bac1",
+  fontSize: 14,
+  bubbleRadius: 8,
+  compactMode: false,
+  highContrast: false,
+  reducedMotion: false,
+  showCloudZai: true,
+  showConsole: true,
+  developerMode: false
 };
 
-const mockPresence: PresenceEntry[] = [
-  { id: "p1", label: "[presence] server-1\\channel-1: 2 online" },
-  { id: "p2", label: "[presence] server-1\\channel-2: 3 online" },
-  { id: "p3", label: "[presence] server-1\\channel-3: 1 online" },
-  { id: "p4", label: "[presence] server-1\\channel-2: 1 online" }
-];
+const DEFAULT_PROFILE: ProfileSettings = {
+  displayName: "",
+  customUsername: "",
+  pfpDataUrl: null
+};
+
+function loadSettings(): Settings {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.settings);
+    if (!raw) return DEFAULT_SETTINGS;
+    const parsed = JSON.parse(raw);
+    return { ...DEFAULT_SETTINGS, ...parsed };
+  } catch {
+    return DEFAULT_SETTINGS;
+  }
+}
+
+function saveSettings(settings: Settings) {
+  try {
+    localStorage.setItem(STORAGE_KEYS.settings, JSON.stringify(settings));
+  } catch {
+    // ignore
+  }
+}
+
+function loadProfile(): ProfileSettings {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.profile);
+    if (!raw) return DEFAULT_PROFILE;
+    const parsed = JSON.parse(raw);
+    return { ...DEFAULT_PROFILE, ...parsed };
+  } catch {
+    return DEFAULT_PROFILE;
+  }
+}
+
+function saveProfile(profile: ProfileSettings) {
+  try {
+    localStorage.setItem(STORAGE_KEYS.profile, JSON.stringify(profile));
+  } catch {
+    // ignore
+  }
+}
+
+function getPresetTheme(preset: ThemePreset): Theme {
+  switch (preset) {
+    case "discord":
+      return {
+        bg: "#202225",
+        bgLight: "#2f3136",
+        bgDark: "#18191c",
+        bgChat: "#36393f",
+        text: "#f2f3f5",
+        textMuted: "#b9bbbe",
+        accent: "#5865f2",
+        accentSoft: "rgba(88, 101, 242, 0.18)",
+        border: "rgba(255,255,255,0.06)"
+      };
+    case "midnight":
+      return {
+        bg: "#050810",
+        bgLight: "#101320",
+        bgDark: "#040612",
+        bgChat: "#141826",
+        text: "#f5f7ff",
+        textMuted: "#9ca3c0",
+        accent: "#00c8ff",
+        accentSoft: "rgba(0, 200, 255, 0.18)",
+        border: "rgba(255,255,255,0.08)"
+      };
+    case "terminal":
+      return {
+        bg: "#050505",
+        bgLight: "#101010",
+        bgDark: "#000000",
+        bgChat: "#111111",
+        text: "#e5ffe5",
+        textMuted: "#85a785",
+        accent: "#00ff5c",
+        accentSoft: "rgba(0, 255, 92, 0.18)",
+        border: "rgba(0,255,92,0.3)"
+      };
+    case "vapor":
+      return {
+        bg: "#0b101c",
+        bgLight: "#141931",
+        bgDark: "#070815",
+        bgChat: "#181d3a",
+        text: "#fdf2ff",
+        textMuted: "#c0b2ff",
+        accent: "#ff6bcb",
+        accentSoft: "rgba(255, 107, 203, 0.18)",
+        border: "rgba(255,255,255,0.1)"
+      };
+    case "cloudz":
+    default:
+      return {
+        bg: "#1e1f22",
+        bgLight: "#2b2d31",
+        bgDark: "#1a1b1e",
+        bgChat: "#313338",
+        text: "#f2f3f5",
+        textMuted: "#b5bac1",
+        accent: "#00c8ff",
+        accentSoft: "rgba(0, 200, 255, 0.18)",
+        border: "rgba(255,255,255,0.06)"
+      };
+  }
+}
+
+function mergeTheme(settings: Settings): Theme {
+  const base = getPresetTheme(settings.themePreset);
+  const accent = settings.customAccent || base.accent;
+  const text = settings.customText || base.text;
+  const textMuted = settings.customTextMuted || base.textMuted;
+
+  const theme: Theme = {
+    bg: settings.customBg || base.bg,
+    bgLight: settings.customBgLight || base.bgLight,
+    bgDark: settings.customBgDark || base.bgDark,
+    bgChat: settings.customBgChat || base.bgChat,
+    text,
+    textMuted,
+    accent,
+    accentSoft:
+      settings.highContrast
+        ? "rgba(255,255,255,0.12)"
+        : `rgba(${parseInt(accent.slice(1, 3), 16)}, ${parseInt(
+            accent.slice(3, 5),
+            16
+          )}, ${parseInt(accent.slice(5, 7), 16)}, 0.18)`,
+    border: settings.highContrast ? "rgba(255,255,255,0.25)" : base.border
+  };
+
+  return theme;
+}
 
 export const CloudNetLayout: React.FC = () => {
-  const [activeChannelId, setActiveChannelId] = useState<string>("channel-2");
-  const [showCloudZai, setShowCloudZai] = useState<boolean>(true);
-  const [showConsole, setShowConsole] = useState<boolean>(true);
-  const [inputValue, setInputValue] = useState<string>("");
+  const [settings, setSettings] = useState<Settings>(() => loadSettings());
+  const [profile, setProfile] = useState<ProfileSettings>(() => loadProfile());
+  const theme = useMemo(() => mergeTheme(settings), [settings]);
 
-  const messages = useMemo(
-    () => mockMessages[activeChannelId] ?? [],
-    [activeChannelId]
+  const [user, setUser] = useState<User | null>(null);
+  const [authChecked, setAuthChecked] = useState(false);
+
+  const [authMode, setAuthMode] = useState<"login" | "register">("login");
+  const [authUsername, setAuthUsername] = useState("");
+  const [authPassword, setAuthPassword] = useState("");
+  const [rememberMe, setRememberMe] = useState(true);
+  const [authError, setAuthError] = useState<string | null>(null);
+
+  const [chats, setChats] = useState<Chat[]>([]);
+  const [activeChatId, setActiveChatId] = useState<string | null>(null);
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [friends, setFriends] = useState<Friend[]>([]);
+  const [inputValue, setInputValue] = useState("");
+
+  const [showSettingsPanel, setShowSettingsPanel] = useState(false);
+  const [showCloudZaiPanel, setShowCloudZaiPanel] = useState(
+    settings.showCloudZai
+  );
+  const [showConsolePanel, setShowConsolePanel] = useState(
+    settings.showConsole
   );
 
-  function handleSend(e: React.FormEvent) {
+  const [presenceLines, setPresenceLines] = useState<PresenceEntry[]>([]);
+
+  const [pfpDragActive, setPfpDragActive] = useState(false);
+
+  useEffect(() => {
+    saveSettings({
+      ...settings,
+      showCloudZai: showCloudZaiPanel,
+      showConsole: showConsolePanel
+    });
+  }, [settings, showCloudZaiPanel, showConsolePanel]);
+
+  useEffect(() => {
+    saveProfile(profile);
+  }, [profile]);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await api.me();
+        setUser(res.user);
+      } catch {
+        // not logged in
+      } finally {
+        setAuthChecked(true);
+      }
+    })();
+  }, []);
+
+  useEffect(() => {
+    if (!user) return;
+
+    const socket = getSocket({
+      onMessage: (msg) => {
+        setMessages((prev) => [...prev, msg]);
+
+        if (!settings.reducedMotion) {
+          setPresenceLines((prev) => [
+            {
+              id: `${Date.now()}-${Math.random()}`,
+              label: `[message] ${msg.chatId}: ${msg.content.slice(0, 32)}`
+            },
+            ...prev.slice(0, 100)
+          ]);
+        }
+      }
+    });
+
+    (async () => {
+      const [friendsRes, chatsRes] = await Promise.all([
+        api.getFriends(),
+        api.getChats()
+      ]);
+      setFriends(friendsRes.friends);
+      setChats(chatsRes.chats);
+
+      const general =
+        chatsRes.chats.find((c) => c.id === "channel:general") ||
+        chatsRes.chats[0] ||
+        null;
+      if (general) setActiveChatId(general.id);
+    })();
+
+    return () => {
+      socket.disconnect();
+    };
+  }, [user, settings.reducedMotion]);
+
+  useEffect(() => {
+    if (!user || !activeChatId) return;
+
+    let cancelled = false;
+    (async () => {
+      const res = await api.getMessages(activeChatId);
+      if (!cancelled) setMessages(res.messages);
+      joinChat(activeChatId);
+    })();
+
+    return () => {
+      cancelled = true;
+      leaveChat(activeChatId);
+    };
+  }, [user, activeChatId]);
+
+  async function handleAuthSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!inputValue.trim()) return;
-    // placeholder: in real app you would emit/send here
+    setAuthError(null);
+    try {
+      const username = authUsername.trim();
+      const password = authPassword.trim();
+      if (!username || !password) {
+        setAuthError("Username and password required");
+        return;
+      }
+
+      const res =
+        authMode === "login"
+          ? await api.login(username, password)
+          : await api.register(username, password);
+
+      if (!rememberMe) {
+        // still using localStorage; could be swapped to session later
+      }
+
+      setToken(res.token);
+      setUser(res.user);
+
+      setProfile((prev) => ({
+        ...prev,
+        displayName: prev.displayName || res.user.username,
+        customUsername: prev.customUsername || res.user.username
+      }));
+    } catch (err: any) {
+      setAuthError(err?.error || "auth_failed");
+    }
+  }
+
+  async function handleSend(e: React.FormEvent) {
+    e.preventDefault();
+    if (!activeChatId || !inputValue.trim()) return;
+    const content = inputValue.trim();
     setInputValue("");
+    await api.sendMessage(activeChatId, content);
+  }
+
+  const activeChat = useMemo(
+    () => chats.find((c) => c.id === activeChatId) || null,
+    [chats, activeChatId]
+  );
+
+  const effectiveDisplayName = profile.displayName || user?.username || "you";
+  const effectiveUsername = profile.customUsername || user?.username || "you";
+
+  function handleSettingsChange<K extends keyof Settings>(
+    key: K,
+    value: Settings[K]
+  ) {
+    setSettings((prev) => ({
+      ...prev,
+      [key]: value
+    }));
+  }
+
+  function handleProfileChange<K extends keyof ProfileSettings>(
+    key: K,
+    value: ProfileSettings[K]
+  ) {
+    setProfile((prev) => ({
+      ...prev,
+      [key]: value
+    }));
+  }
+
+  async function handlePfpFile(file: File) {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result;
+      if (typeof result === "string") {
+        handleProfileChange("pfpDataUrl", result);
+      }
+    };
+    reader.readAsDataURL(file);
+  }
+
+  function handlePfpDrop(e: React.DragEvent<HTMLDivElement>) {
+    e.preventDefault();
+    e.stopPropagation();
+    setPfpDragActive(false);
+    if (!e.dataTransfer.files || e.dataTransfer.files.length === 0) return;
+    const file = e.dataTransfer.files[0];
+    if (!file.type.startsWith("image/")) return;
+    handlePfpFile(file);
+  }
+
+  function handlePfpDragOver(e: React.DragEvent<HTMLDivElement>) {
+    e.preventDefault();
+    e.stopPropagation();
+    setPfpDragActive(true);
+  }
+
+  function handlePfpDragLeave(e: React.DragEvent<HTMLDivElement>) {
+    e.preventDefault();
+    e.stopPropagation();
+    setPfpDragActive(false);
+  }
+
+  function handlePfpInputChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file || !file.type.startsWith("image/")) return;
+    handlePfpFile(file);
+  }
+
+  const fontSize = settings.fontSize;
+  const bubbleRadius = settings.bubbleRadius;
+  const compact = settings.compactMode;
+
+  if (!authChecked) {
+    return (
+      <div
+        style={{
+          display: "flex",
+          height: "100vh",
+          width: "100vw",
+          background: theme.bg,
+          color: theme.text,
+          fontFamily:
+            'system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif',
+          alignItems: "center",
+          justifyContent: "center"
+        }}
+      >
+        <div>Loading...</div>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return (
+      <div
+        style={{
+          display: "flex",
+          height: "100vh",
+          width: "100vw",
+          background: theme.bg,
+          color: theme.text,
+          fontFamily:
+            'system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif',
+          alignItems: "center",
+          justifyContent: "center"
+        }}
+      >
+        <div
+          style={{
+            width: 340,
+            padding: 20,
+            borderRadius: 12,
+            background: theme.bgDark,
+            border: `1px solid ${theme.border}`
+          }}
+        >
+          <div
+            style={{
+              fontSize: 18,
+              fontWeight: 700,
+              marginBottom: 4
+            }}
+          >
+            CloudNET
+          </div>
+          <div
+            style={{
+              fontSize: 13,
+              color: theme.textMuted,
+              marginBottom: 16
+            }}
+          >
+            Sign in to your Cloud
+          </div>
+          <form
+            onSubmit={handleAuthSubmit}
+            style={{ display: "flex", flexDirection: "column", gap: 8 }}
+          >
+            <input
+              style={{
+                borderRadius: 6,
+                border: `1px solid ${theme.border}`,
+                padding: "8px 10px",
+                fontSize: 13,
+                background: theme.bg,
+                color: theme.text
+              }}
+              placeholder="Username"
+              value={authUsername}
+              onChange={(e) => setAuthUsername(e.target.value)}
+            />
+            <input
+              style={{
+                borderRadius: 6,
+                border: `1px solid ${theme.border}`,
+                padding: "8px 10px",
+                fontSize: 13,
+                background: theme.bg,
+                color: theme.text
+              }}
+              type="password"
+              placeholder="Password"
+              value={authPassword}
+              onChange={(e) => setAuthPassword(e.target.value)}
+            />
+            <label
+              style={{
+                display: "flex",
+                alignItems: "center",
+                fontSize: 12,
+                color: theme.textMuted
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={rememberMe}
+                onChange={(e) => setRememberMe(e.target.checked)}
+                style={{ marginRight: 6 }}
+              />
+              <span>Remember Me</span>
+            </label>
+            {authError && (
+              <div style={{ color: "#ff5c5c", fontSize: 12 }}>
+                {authError}
+              </div>
+            )}
+            <button
+              type="submit"
+              style={{
+                marginTop: 4,
+                borderRadius: 6,
+                border: "none",
+                background: theme.accent,
+                color: theme.bgDark,
+                fontWeight: 600,
+                fontSize: 13,
+                padding: "8px 10px",
+                cursor: "pointer"
+              }}
+            >
+              {authMode === "login" ? "Login" : "Create account"}
+            </button>
+          </form>
+          <div
+            style={{
+              marginTop: 12,
+              fontSize: 12,
+              color: theme.textMuted
+            }}
+          >
+            {authMode === "login" ? (
+              <>
+                No account?{" "}
+                <span
+                  style={{
+                    color: theme.accent,
+                    cursor: "pointer",
+                    textDecoration: "underline"
+                  }}
+                  onClick={() => setAuthMode("register")}
+                >
+                  Create one
+                </span>
+              </>
+            ) : (
+              <>
+                Already have an account?{" "}
+                <span
+                  style={{
+                    color: theme.accent,
+                    cursor: "pointer",
+                    textDecoration: "underline"
+                  }}
+                  onClick={() => setAuthMode("login")}
+                >
+                  Login
+                </span>
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+    );
   }
 
   return (
-    <div style={root}>
-      {/* SERVER DOCK */}
-      <div style={serverDock}>
-        <div style={dockLogo}>C</div>
-        <DockItem label="server-1" active />
-        <DockItem label="+" />
+    <div
+      style={{
+        display: "flex",
+        height: "100vh",
+        width: "100vw",
+        background: theme.bg,
+        color: theme.text,
+        fontFamily:
+          'system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif',
+        overflow: "hidden"
+      }}
+    >
+      <div
+        style={{
+          width: 72,
+          background: theme.bgDark,
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          paddingTop: 12,
+          gap: 10,
+          borderRight: `1px solid ${theme.border}`
+        }}
+      >
+        <div
+          style={{
+            width: 40,
+            height: 40,
+            borderRadius: 20,
+            background: theme.accentSoft,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            fontWeight: 700
+          }}
+        >
+          C
+        </div>
+        <div
+          style={{
+            width: 40,
+            height: 40,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            color: theme.text,
+            fontSize: 18,
+            cursor: "pointer",
+            transition: "background 0.15s ease",
+            borderRadius: 16,
+            backgroundColor: theme.accentSoft
+          }}
+        >
+          S
+        </div>
+        <div
+          style={{
+            width: 40,
+            height: 40,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            color: theme.text,
+            fontSize: 18,
+            cursor: "pointer",
+            transition: "background 0.15s ease",
+            borderRadius: 16
+          }}
+        >
+          +
+        </div>
       </div>
 
-      {/* CHANNEL NAV */}
-      <div style={channelNav}>
-        <div style={channelNavHeader}>
-          <div style={serverName}>server-1</div>
+      <div
+        style={{
+          width: 260,
+          background: theme.bgLight,
+          display: "flex",
+          flexDirection: "column",
+          borderRight: `1px solid ${theme.border}`
+        }}
+      >
+        <div
+          style={{
+            height: 48,
+            display: "flex",
+            alignItems: "center",
+            padding: "0 12px",
+            borderBottom: `1px solid ${theme.border}`,
+            fontWeight: 600,
+            fontSize: 14
+          }}
+        >
+          <div style={{ color: theme.text }}>server-1</div>
         </div>
-        <div style={channelList}>
-          <section style={sectionBlock}>
-            <div style={sectionTitle}>TEXT CHANNELS</div>
-            {mockChannels.map((ch) => (
-              <ChannelItem
-                key={ch.id}
-                channel={ch}
-                active={ch.id === activeChannelId}
-                onClick={() => setActiveChannelId(ch.id)}
-              />
+
+        <div
+          style={{
+            flex: 1,
+            overflowY: "auto",
+            padding: "8px 8px 8px 8px"
+          }}
+        >
+          <section style={{ marginBottom: 16 }}>
+            <div
+              style={{
+                fontSize: 11,
+                color: theme.textMuted,
+                letterSpacing: 0.5,
+                marginBottom: 6
+              }}
+            >
+              TEXT CHANNELS
+            </div>
+            {chats
+              .filter((c) => c.type === "channel")
+              .map((c) => {
+                const active = c.id === activeChatId;
+                return (
+                  <div
+                    key={c.id}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      padding: compact ? "2px 6px" : "4px 8px",
+                      borderRadius: 6,
+                      fontSize,
+                      cursor: "pointer",
+                      marginBottom: 2,
+                      backgroundColor: active ? theme.accentSoft : "transparent",
+                      color: active ? theme.text : theme.textMuted
+                    }}
+                    onClick={() => setActiveChatId(c.id)}
+                  >
+                    <span style={{ marginRight: 6, opacity: 0.9 }}>#</span>
+                    <span>{c.name || "channel"}</span>
+                    {settings.developerMode && (
+                      <span
+                        style={{
+                          marginLeft: "auto",
+                          fontSize: 10,
+                          opacity: 0.6
+                        }}
+                      >
+                        {c.id}
+                      </span>
+                    )}
+                  </div>
+                );
+              })}
+          </section>
+
+          <section style={{ marginBottom: 16 }}>
+            <div
+              style={{
+                fontSize: 11,
+                color: theme.textMuted,
+                letterSpacing: 0.5,
+                marginBottom: 6
+              }}
+            >
+              DIRECT MESSAGES
+            </div>
+            {chats
+              .filter((c) => c.type === "dm")
+              .map((c) => {
+                const active = c.id === activeChatId;
+                return (
+                  <div
+                    key={c.id}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      padding: compact ? "2px 6px" : "4px 8px",
+                      borderRadius: 6,
+                      fontSize,
+                      cursor: "pointer",
+                      marginBottom: 2,
+                      backgroundColor: active ? theme.accentSoft : "transparent",
+                      color: active ? theme.text : theme.textMuted
+                    }}
+                    onClick={() => setActiveChatId(c.id)}
+                  >
+                    <span>{c.name || "DM"}</span>
+                    {settings.developerMode && (
+                      <span
+                        style={{
+                          marginLeft: "auto",
+                          fontSize: 10,
+                          opacity: 0.6
+                        }}
+                      >
+                        {c.id}
+                      </span>
+                    )}
+                  </div>
+                );
+              })}
+          </section>
+
+          <section style={{ marginBottom: 16 }}>
+            <div
+              style={{
+                fontSize: 11,
+                color: theme.textMuted,
+                letterSpacing: 0.5,
+                marginBottom: 6
+              }}
+            >
+              GROUP CHATS
+            </div>
+            {chats
+              .filter((c) => c.type === "gc")
+              .map((c) => {
+                const active = c.id === activeChatId;
+                return (
+                  <div
+                    key={c.id}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      padding: compact ? "2px 6px" : "4px 8px",
+                      borderRadius: 6,
+                      fontSize,
+                      cursor: "pointer",
+                      marginBottom: 2,
+                      backgroundColor: active ? theme.accentSoft : "transparent",
+                      color: active ? theme.text : theme.textMuted
+                    }}
+                    onClick={() => setActiveChatId(c.id)}
+                  >
+                    <span>{c.name || "Group"}</span>
+                    {settings.developerMode && (
+                      <span
+                        style={{
+                          marginLeft: "auto",
+                          fontSize: 10,
+                          opacity: 0.6
+                        }}
+                      >
+                        {c.id}
+                      </span>
+                    )}
+                  </div>
+                );
+              })}
+          </section>
+
+          <section>
+            <div
+              style={{
+                fontSize: 11,
+                color: theme.textMuted,
+                letterSpacing: 0.5,
+                marginBottom: 6
+              }}
+            >
+              FRIENDS
+            </div>
+            {friends.map((f) => (
+              <div
+                key={f.id}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  fontSize,
+                  marginBottom: 4
+                }}
+              >
+                <div
+                  style={{
+                    width: 20,
+                    height: 20,
+                    borderRadius: 999,
+                    background: theme.bgDark,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    fontSize: 11,
+                    color: theme.textMuted
+                  }}
+                >
+                  {f.username.slice(0, 2).toUpperCase()}
+                </div>
+                <div style={{ color: theme.text }}>{f.username}</div>
+                {settings.developerMode && (
+                  <span
+                    style={{
+                      marginLeft: "auto",
+                      fontSize: 10,
+                      opacity: 0.6
+                    }}
+                  >
+                    {f.id}
+                  </span>
+                )}
+              </div>
             ))}
           </section>
         </div>
-        <div style={channelFooter}>
-          <div style={userTag}>
-            <div style={userAvatar}>Y</div>
-            <div style={userInfo}>
-              <div style={userName}>you</div>
-              <div style={userSub}>online</div>
+
+        <div
+          style={{
+            height: 60,
+            borderTop: `1px solid ${theme.border}`,
+            padding: "0 8px",
+            display: "flex",
+            alignItems: "center"
+          }}
+        >
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              width: "100%"
+            }}
+          >
+            <div
+              style={{
+                width: 32,
+                height: 32,
+                borderRadius: 999,
+                background: theme.bgDark,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                overflow: "hidden"
+              }}
+            >
+              {profile.pfpDataUrl ? (
+                <img
+                  src={profile.pfpDataUrl}
+                  alt="pfp"
+                  style={{
+                    width: "100%",
+                    height: "100%",
+                    objectFit: "cover"
+                  }}
+                />
+              ) : (
+                <span
+                  style={{
+                    fontSize: 13,
+                    color: theme.textMuted
+                  }}
+                >
+                  {effectiveDisplayName.slice(0, 1).toUpperCase()}
+                </span>
+              )}
             </div>
+            <div
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                fontSize: 12
+              }}
+            >
+              <div style={{ color: theme.text }}>
+                {effectiveDisplayName}
+              </div>
+              <div
+                style={{
+                  color: theme.textMuted,
+                  fontSize: 11
+                }}
+              >
+                @{effectiveUsername}
+              </div>
+            </div>
+            <button
+              style={{
+                marginLeft: "auto",
+                background: "transparent",
+                border: "none",
+                color: theme.textMuted,
+                fontSize: 12,
+                cursor: "pointer"
+              }}
+              onClick={() => setShowSettingsPanel(true)}
+            >
+              ⚙
+            </button>
           </div>
         </div>
       </div>
 
-      {/* MAIN COLUMN */}
-      <div style={mainColumn}>
-        {/* TOP BAR */}
-        <div style={topBar}>
-          <div style={topBarLeft}>
-            <span style={hash}>#</span>
-            <span style={topChannelName}>
-              {mockChannels.find((c) => c.id === activeChannelId)?.name ??
-                "channel"}
+      <div
+        style={{
+          flex: 1,
+          display: "flex",
+          flexDirection: "column",
+          minWidth: 0
+        }}
+      >
+        <div
+          style={{
+            height: 48,
+            background: theme.bgDark,
+            borderBottom: `1px solid ${theme.border}`,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            padding: "0 12px"
+          }}
+        >
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 6
+            }}
+          >
+            <span
+              style={{
+                fontSize: 18,
+                color: theme.textMuted
+              }}
+            >
+              #
+            </span>
+            <span
+              style={{
+                fontSize: 15,
+                fontWeight: 600
+              }}
+            >
+              {activeChat
+                ? activeChat.name || activeChat.id
+                : "Select a chat"}
             </span>
           </div>
-          <div style={topBarRight}>
+          <div
+            style={{
+              display: "flex",
+              gap: 8
+            }}
+          >
             <button
-              style={topButton}
-              onClick={() => setShowCloudZai((v) => !v)}
+              style={{
+                background: theme.bgLight,
+                border: `1px solid ${theme.border}`,
+                borderRadius: 6,
+                padding: "4px 8px",
+                fontSize: 12,
+                color: theme.textMuted,
+                cursor: "pointer"
+              }}
+              onClick={() =>
+                setShowCloudZaiPanel((v) => !v)
+              }
             >
-              CloudZAI {showCloudZai ? "▾" : "▸"}
+              CloudZAI {showCloudZaiPanel ? "▾" : "▸"}
             </button>
             <button
-              style={topButton}
-              onClick={() => setShowConsole((v) => !v)}
+              style={{
+                background: theme.bgLight,
+                border: `1px solid ${theme.border}`,
+                borderRadius: 6,
+                padding: "4px 8px",
+                fontSize: 12,
+                color: theme.textMuted,
+                cursor: "pointer"
+              }}
+              onClick={() =>
+                setShowConsolePanel((v) => !v)
+              }
             >
-              Console {showConsole ? "▾" : "▸"}
+              Console {showConsolePanel ? "▾" : "▸"}
+            </button>
+            <button
+              style={{
+                background: theme.bgLight,
+                border: `1px solid ${theme.border}`,
+                borderRadius: 6,
+                padding: "4px 8px",
+                fontSize: 12,
+                color: theme.textMuted,
+                cursor: "pointer"
+              }}
+              onClick={() =>
+                setShowSettingsPanel((v) => !v)
+              }
+            >
+              Settings
             </button>
           </div>
         </div>
 
-        {/* CHAT CORE */}
-        <div style={chatCore}>
-          <div style={messagesPane} className="messages-pane">
+        <div
+          style={{
+            flex: 1,
+            display: "flex",
+            flexDirection: "column",
+            background: theme.bgChat,
+            position: "relative"
+          }}
+        >
+          <div
+            style={{
+              flex: 1,
+              padding: compact ? "8px 10px" : "12px 16px",
+              overflowY: "auto",
+              display: "flex",
+              flexDirection: "column",
+              gap: compact ? 4 : 8
+            }}
+            className="messages-pane"
+          >
             {messages.map((m) => (
-              <div key={m.id} style={messageRow}>
-                <div style={messageHeader}>
-                  <span style={messageAuthor}>{m.author}</span>
-                  <span style={messageTimestamp}>{m.timestamp}</span>
+              <div
+                key={m.id}
+                style={{
+                  display: "flex",
+                  flexDirection: "column"
+                }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "baseline",
+                    gap: 6,
+                    fontSize: Math.max(10, fontSize - 2)
+                  }}
+                >
+                  <span
+                    style={{
+                      fontWeight: 600
+                    }}
+                  >
+                    {m.senderId === user.id
+                      ? effectiveDisplayName
+                      : m.senderId}
+                  </span>
+                  <span
+                    style={{
+                      fontSize: Math.max(9, fontSize - 3),
+                      color: theme.textMuted
+                    }}
+                  >
+                    {new Date(
+                      m.createdAt
+                    ).toLocaleTimeString()}
+                  </span>
+                  {settings.developerMode && (
+                    <span
+                      style={{
+                        fontSize: 9,
+                        color: theme.textMuted
+                      }}
+                    >
+                      {m.id}
+                    </span>
+                  )}
                 </div>
-                <div style={messageBubble}>{m.content}</div>
+                <div
+                  style={{
+                    marginTop: 2,
+                    background: theme.bgLight,
+                    borderRadius: bubbleRadius,
+                    padding: compact ? "4px 8px" : "6px 10px",
+                    fontSize
+                  }}
+                >
+                  {m.content}
+                </div>
               </div>
             ))}
           </div>
-          <form style={inputBar} onSubmit={handleSend}>
+          <form
+            style={{
+              padding: "8px 12px",
+              borderTop: `1px solid ${theme.border}`,
+              background: theme.bgDark
+            }}
+            onSubmit={handleSend}
+          >
             <input
-              style={input}
-              placeholder={`Message #${
-                mockChannels.find((c) => c.id === activeChannelId)?.name ??
-                "channel"
-              }`}
+              style={{
+                width: "100%",
+                borderRadius: 8,
+                border: "none",
+                outline: "none",
+                padding: "8px 10px",
+                background: theme.bgLight,
+                color: theme.text,
+                fontSize
+              }}
+              placeholder={
+                activeChat
+                  ? activeChat.type === "channel"
+                    ? `Message #${activeChat.name || "channel"}`
+                    : `Message ${
+                        activeChat.name || "chat"
+                      }`
+                  : "Select a chat"
+              }
               value={inputValue}
-              onChange={(e) => setInputValue(e.target.value)}
+              onChange={(e) =>
+                setInputValue(e.target.value)
+              }
+              disabled={!activeChat}
             />
           </form>
-          {showConsole && (
-            <div style={consoleBar} className="console-bar">
-              <div style={consoleHeader}>System Console</div>
-              <div style={consoleBody}>
-                {mockPresence.map((p) => (
-                  <div key={p.id} style={consoleLine}>
+          {showConsolePanel && (
+            <div
+              style={{
+                borderTop: `1px solid ${theme.border}`,
+                background: theme.bgDark,
+                height: 120,
+                display: "flex",
+                flexDirection: "column"
+              }}
+            >
+              <div
+                style={{
+                  fontSize: 12,
+                  color: theme.textMuted,
+                  padding: "4px 10px"
+                }}
+              >
+                System Console
+              </div>
+              <div
+                style={{
+                  flex: 1,
+                  padding: "0 10px 6px 10px",
+                  overflowY: "auto",
+                  fontSize: 12
+                }}
+              >
+                {presenceLines.map((p) => (
+                  <div
+                    key={p.id}
+                    style={{ color: theme.textMuted }}
+                  >
                     {p.label}
                   </div>
                 ))}
@@ -212,376 +1249,621 @@ export const CloudNetLayout: React.FC = () => {
         </div>
       </div>
 
-      {/* CLOUDZAI PANEL (TOGGLEABLE) */}
-      {showCloudZai && (
-        <div style={cloudZaiPanel} className="cloudzai-panel">
-          <div style={cloudZaiHeader}>
+      {showCloudZaiPanel && (
+        <div
+          style={{
+            width: 280,
+            background: theme.bgLight,
+            borderLeft: `1px solid ${theme.border}`,
+            display: "flex",
+            flexDirection: "column"
+          }}
+          className="cloudzai-panel"
+        >
+          <div
+            style={{
+              padding: "10px 12px",
+              borderBottom: `1px solid ${theme.border}`,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between"
+            }}
+          >
             <div>
-              <div style={cloudZaiTitle}>CloudZAI</div>
-              <div style={cloudZaiSubtitle}>Ambient insight layer</div>
+              <div
+                style={{
+                  fontSize: 14,
+                  fontWeight: 600
+                }}
+              >
+                CloudZAI
+              </div>
+              <div
+                style={{
+                  fontSize: 12,
+                  color: theme.textMuted
+                }}
+              >
+                Ambient insight layer
+              </div>
             </div>
           </div>
-          <div style={cloudZaiBody}>
-            <p style={cloudZaiText}>
-              CloudZAI will skim this channel and surface highlights, patterns,
-              and anomalies in real time.
+          <div
+            style={{
+              padding: "10px 12px",
+              fontSize: 13,
+              color: theme.textMuted,
+              flex: 1,
+              overflowY: "auto"
+            }}
+          >
+            <p style={{ marginBottom: 8 }}>
+              CloudZAI will skim this channel and surface
+              highlights, patterns, and anomalies in real
+              time.
             </p>
-            <p style={cloudZaiText}>
-              In the real version, this panel reacts to message volume, sentiment,
-              and event spikes — without being noisy.
+            <p style={{ marginBottom: 8 }}>
+              Next update, this panel becomes fully
+              chattable — direct prompts, insights, and
+              commentary woven into your channels.
             </p>
+            {settings.developerMode && (
+              <p
+                style={{
+                  marginTop: 12,
+                  fontSize: 11,
+                  opacity: 0.8
+                }}
+              >
+                Developer mode: you can wire this panel to
+                your AI endpoint and stream responses into
+                a message list here.
+              </p>
+            )}
+          </div>
+        </div>
+      )}
+
+      {showSettingsPanel && (
+        <div
+          style={{
+            position: "absolute",
+            top: 0,
+            right: 0,
+            height: "100vh",
+            width: 340,
+            background: theme.bgDark,
+            borderLeft: `1px solid ${theme.border}`,
+            display: "flex",
+            flexDirection: "column",
+            zIndex: 50
+          }}
+        >
+          <div
+            style={{
+              padding: "10px 12px",
+              borderBottom: `1px solid ${theme.border}`,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between"
+            }}
+          >
+            <div
+              style={{
+                fontSize: 14,
+                fontWeight: 600
+              }}
+            >
+              Settings
+            </div>
+            <button
+              style={{
+                background: "transparent",
+                border: "none",
+                color: theme.textMuted,
+                cursor: "pointer"
+              }}
+              onClick={() => setShowSettingsPanel(false)}
+            >
+              ✕
+            </button>
+          </div>
+          <div
+            style={{
+              flex: 1,
+              overflowY: "auto",
+              padding: "10px 12px",
+              fontSize: 13,
+              color: theme.text
+            }}
+          >
+            <div
+              style={{
+                marginBottom: 12,
+                fontSize: 11,
+                color: theme.textMuted
+              }}
+            >
+              Appearance
+            </div>
+            <div
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                gap: 8,
+                marginBottom: 16
+              }}
+            >
+              <label>
+                Theme preset
+                <select
+                  value={settings.themePreset}
+                  onChange={(e) =>
+                    handleSettingsChange(
+                      "themePreset",
+                      e.target
+                        .value as ThemePreset
+                    )
+                  }
+                  style={{
+                    width: "100%",
+                    marginTop: 4,
+                    background: theme.bg,
+                    color: theme.text,
+                    borderRadius: 6,
+                    border: `1px solid ${theme.border}`,
+                    padding: "4px 6px",
+                    fontSize: 13
+                  }}
+                >
+                  <option value="cloudz">CloudZ</option>
+                  <option value="discord">
+                    Discord Dark
+                  </option>
+                  <option value="midnight">
+                    Midnight
+                  </option>
+                  <option value="terminal">
+                    Terminal Green
+                  </option>
+                  <option value="vapor">
+                    Vaporwave
+                  </option>
+                </select>
+              </label>
+              <label
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: 8
+                }}
+              >
+                <span>Accent</span>
+                <input
+                  type="color"
+                  value={settings.customAccent}
+                  onChange={(e) =>
+                    handleSettingsChange(
+                      "customAccent",
+                      e.target.value
+                    )
+                  }
+                />
+              </label>
+              <label
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: 8
+                }}
+              >
+                <span>Background</span>
+                <input
+                  type="color"
+                  value={settings.customBg}
+                  onChange={(e) =>
+                    handleSettingsChange(
+                      "customBg",
+                      e.target.value
+                    )
+                  }
+                />
+              </label>
+              <label
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: 8
+                }}
+              >
+                <span>Sidebar</span>
+                <input
+                  type="color"
+                  value={settings.customBgLight}
+                  onChange={(e) =>
+                    handleSettingsChange(
+                      "customBgLight",
+                      e.target.value
+                    )
+                  }
+                />
+              </label>
+              <label
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: 8
+                }}
+              >
+                <span>Chat</span>
+                <input
+                  type="color"
+                  value={settings.customBgChat}
+                  onChange={(e) =>
+                    handleSettingsChange(
+                      "customBgChat",
+                      e.target.value
+                    )
+                  }
+                />
+              </label>
+              <label>
+                Font size ({settings.fontSize}px)
+                <input
+                  type="range"
+                  min={11}
+                  max={18}
+                  value={settings.fontSize}
+                  onChange={(e) =>
+                    handleSettingsChange(
+                      "fontSize",
+                      Number(e.target.value)
+                    )
+                  }
+                  style={{ width: "100%" }}
+                />
+              </label>
+              <label>
+                Bubble radius ({settings.bubbleRadius}px)
+                <input
+                  type="range"
+                  min={0}
+                  max={16}
+                  value={settings.bubbleRadius}
+                  onChange={(e) =>
+                    handleSettingsChange(
+                      "bubbleRadius",
+                      Number(e.target.value)
+                    )
+                  }
+                  style={{ width: "100%" }}
+                />
+              </label>
+              <label
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 6
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={settings.compactMode}
+                  onChange={(e) =>
+                    handleSettingsChange(
+                      "compactMode",
+                      e.target.checked
+                    )
+                  }
+                />
+                <span>Compact mode</span>
+              </label>
+              <label
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 6
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={settings.highContrast}
+                  onChange={(e) =>
+                    handleSettingsChange(
+                      "highContrast",
+                      e.target.checked
+                    )
+                  }
+                />
+                <span>High contrast</span>
+              </label>
+              <label
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 6
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={settings.reducedMotion}
+                  onChange={(e) =>
+                    handleSettingsChange(
+                      "reducedMotion",
+                      e.target.checked
+                    )
+                  }
+                />
+                <span>Reduced motion</span>
+              </label>
+            </div>
+
+            <div
+              style={{
+                marginBottom: 12,
+                fontSize: 11,
+                color: theme.textMuted
+              }}
+            >
+              Profile
+            </div>
+            <div
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                gap: 8,
+                marginBottom: 16
+              }}
+            >
+              <label>
+                Display name
+                <input
+                  style={{
+                    width: "100%",
+                    marginTop: 4,
+                    background: theme.bg,
+                    color: theme.text,
+                    borderRadius: 6,
+                    border: `1px solid ${theme.border}`,
+                    padding: "4px 6px",
+                    fontSize: 13
+                  }}
+                  value={profile.displayName}
+                  onChange={(e) =>
+                    handleProfileChange(
+                      "displayName",
+                      e.target.value
+                    )
+                  }
+                />
+              </label>
+              <label>
+                Username (local label)
+                <input
+                  style={{
+                    width: "100%",
+                    marginTop: 4,
+                    background: theme.bg,
+                    color: theme.text,
+                    borderRadius: 6,
+                    border: `1px solid ${theme.border}`,
+                    padding: "4px 6px",
+                    fontSize: 13
+                  }}
+                  value={profile.customUsername}
+                  onChange={(e) =>
+                    handleProfileChange(
+                      "customUsername",
+                      e.target.value
+                    )
+                  }
+                />
+              </label>
+              <div>
+                <div
+                  style={{
+                    marginBottom: 4
+                  }}
+                >
+                  Profile picture
+                </div>
+                <div
+                  onDrop={handlePfpDrop}
+                  onDragOver={handlePfpDragOver}
+                  onDragLeave={handlePfpDragLeave}
+                  style={{
+                    borderRadius: 8,
+                    border: `1px dashed ${theme.border}`,
+                    padding: 10,
+                    textAlign: "center",
+                    fontSize: 12,
+                    color: theme.textMuted,
+                    marginBottom: 8,
+                    background: pfpDragActive
+                      ? theme.accentSoft
+                      : "transparent",
+                    cursor: "pointer"
+                  }}
+                >
+                  <div style={{ marginBottom: 6 }}>
+                    Drag image here or click to upload
+                  </div>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    onChange={handlePfpInputChange}
+                    style={{ display: "none" }}
+                    id="pfp-input"
+                  />
+                  <label
+                    htmlFor="pfp-input"
+                    style={{
+                      display: "inline-block",
+                      padding: "4px 8px",
+                      borderRadius: 6,
+                      border: `1px solid ${theme.border}`,
+                      background: theme.bgLight,
+                      color: theme.text,
+                      cursor: "pointer"
+                    }}
+                  >
+                    Choose file
+                  </label>
+                </div>
+                {profile.pfpDataUrl && (
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 8
+                    }}
+                  >
+                    <div
+                      style={{
+                        width: 40,
+                        height: 40,
+                        borderRadius: 999,
+                        overflow: "hidden"
+                      }}
+                    >
+                      <img
+                        src={profile.pfpDataUrl}
+                        alt="pfp-prev"
+                        style={{
+                          width: "100%",
+                          height: "100%",
+                          objectFit: "cover"
+                        }}
+                      />
+                    </div>
+                    <button
+                      style={{
+                        background: "transparent",
+                        border: "none",
+                        color: theme.textMuted,
+                        fontSize: 12,
+                        cursor: "pointer"
+                      }}
+                      onClick={() =>
+                        handleProfileChange(
+                          "pfpDataUrl",
+                          null
+                        )
+                      }
+                    >
+                      Remove
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div
+              style={{
+                marginBottom: 12,
+                fontSize: 11,
+                color: theme.textMuted
+              }}
+            >
+              Behavior
+            </div>
+            <div
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                gap: 8,
+                marginBottom: 16
+              }}
+            >
+              <label
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 6
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={showCloudZaiPanel}
+                  onChange={(e) =>
+                    setShowCloudZaiPanel(e.target.checked)
+                  }
+                />
+                <span>CloudZAI panel visible</span>
+              </label>
+              <label
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 6
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={showConsolePanel}
+                  onChange={(e) =>
+                    setShowConsolePanel(e.target.checked)
+                  }
+                />
+                <span>Console visible</span>
+              </label>
+            </div>
+
+            <div
+              style={{
+                marginBottom: 12,
+                fontSize: 11,
+                color: theme.textMuted
+              }}
+            >
+              Developer
+            </div>
+            <div
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                gap: 8,
+                marginBottom: 16
+              }}
+            >
+              <label
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 6
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={settings.developerMode}
+                  onChange={(e) =>
+                    handleSettingsChange(
+                      "developerMode",
+                      e.target.checked
+                    )
+                  }
+                />
+                <span>Developer mode</span>
+              </label>
+            </div>
+
+            <div
+              style={{
+                fontSize: 11,
+                color: theme.textMuted,
+                marginTop: 8
+              }}
+            >
+              Next update: full CloudZAI chat wiring +
+              AI personalities live in this same file.
+            </div>
           </div>
         </div>
       )}
     </div>
   );
-};
-
-// Dock item
-const DockItem: React.FC<{ label: string; active?: boolean }> = ({
-  label,
-  active
-}) => {
-  return (
-    <div
-      style={{
-        ...dockItem,
-        backgroundColor: active ? theme.accentSoft : "transparent",
-        borderRadius: 16
-      }}
-    >
-      <span>{label[0]}</span>
-    </div>
-  );
-};
-
-// Channel item
-const ChannelItem: React.FC<{
-  channel: Channel;
-  active?: boolean;
-  onClick: () => void;
-}> = ({ channel, active, onClick }) => {
-  return (
-    <div
-      style={{
-        ...channelItem,
-        backgroundColor: active ? theme.accentSoft : "transparent",
-        color: active ? theme.text : theme.textMuted
-      }}
-      onClick={onClick}
-    >
-      <span style={{ marginRight: 6, opacity: 0.9 }}>#</span>
-      <span>{channel.name}</span>
-    </div>
-  );
-};
-
-// --- Styles ---
-
-const root: React.CSSProperties = {
-  display: "flex",
-  height: "100vh",
-  width: "100vw",
-  background: theme.bg,
-  color: theme.text,
-  fontFamily: 'system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif',
-  overflow: "hidden"
-};
-
-const serverDock: React.CSSProperties = {
-  width: 72,
-  background: theme.bgDark,
-  display: "flex",
-  flexDirection: "column",
-  alignItems: "center",
-  paddingTop: 12,
-  gap: 10,
-  borderRight: `1px solid ${theme.border}`
-};
-
-const dockLogo: React.CSSProperties = {
-  width: 40,
-  height: 40,
-  borderRadius: 20,
-  background: theme.accentSoft,
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-  fontWeight: 700,
-  cursor: "default"
-};
-
-const dockItem: React.CSSProperties = {
-  width: 40,
-  height: 40,
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-  color: theme.text,
-  fontSize: 18,
-  cursor: "pointer",
-  transition: "background 0.15s ease"
-};
-
-const channelNav: React.CSSProperties = {
-  width: 260,
-  background: theme.bgLight,
-  display: "flex",
-  flexDirection: "column",
-  borderRight: `1px solid ${theme.border}`
-};
-
-const channelNavHeader: React.CSSProperties = {
-  height: 48,
-  display: "flex",
-  alignItems: "center",
-  padding: "0 12px",
-  borderBottom: `1px solid ${theme.border}`,
-  fontWeight: 600,
-  fontSize: 14
-};
-
-const serverName: React.CSSProperties = {
-  color: theme.text
-};
-
-const channelList: React.CSSProperties = {
-  flex: 1,
-  overflowY: "auto",
-  padding: "8px 8px 8px 8px"
-};
-
-const sectionBlock: React.CSSProperties = {
-  marginBottom: 16
-};
-
-const sectionTitle: React.CSSProperties = {
-  fontSize: 11,
-  color: theme.textMuted,
-  letterSpacing: 0.5,
-  marginBottom: 6
-};
-
-const channelItem: React.CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  padding: "4px 8px",
-  borderRadius: 6,
-  fontSize: 14,
-  cursor: "pointer",
-  marginBottom: 2
-};
-
-const channelFooter: React.CSSProperties = {
-  height: 52,
-  borderTop: `1px solid ${theme.border}`,
-  padding: "0 8px",
-  display: "flex",
-  alignItems: "center"
-};
-
-const userTag: React.CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  gap: 8,
-  width: "100%"
-};
-
-const userAvatar: React.CSSProperties = {
-  width: 28,
-  height: 28,
-  borderRadius: 999,
-  background: theme.bgDark,
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-  fontSize: 13,
-  color: theme.textMuted
-};
-
-const userInfo: React.CSSProperties = {
-  display: "flex",
-  flexDirection: "column",
-  fontSize: 12
-};
-
-const userName: React.CSSProperties = {
-  color: theme.text
-};
-
-const userSub: React.CSSProperties = {
-  color: theme.textMuted,
-  fontSize: 11
-};
-
-const mainColumn: React.CSSProperties = {
-  flex: 1,
-  display: "flex",
-  flexDirection: "column",
-  minWidth: 0
-};
-
-const topBar: React.CSSProperties = {
-  height: 48,
-  background: theme.bgDark,
-  borderBottom: `1px solid ${theme.border}`,
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "space-between",
-  padding: "0 12px"
-};
-
-const topBarLeft: React.CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  gap: 6
-};
-
-const hash: React.CSSProperties = {
-  fontSize: 18,
-  color: theme.textMuted
-};
-
-const topChannelName: React.CSSProperties = {
-  fontSize: 15,
-  fontWeight: 600
-};
-
-const topBarRight: React.CSSProperties = {
-  display: "flex",
-  gap: 8
-};
-
-const topButton: React.CSSProperties = {
-  background: theme.bgLight,
-  border: `1px solid ${theme.border}`,
-  borderRadius: 6,
-  padding: "4px 8px",
-  fontSize: 12,
-  color: theme.textMuted,
-  cursor: "pointer"
-};
-
-const chatCore: React.CSSProperties = {
-  flex: 1,
-  display: "flex",
-  flexDirection: "column",
-  background: theme.bgChat,
-  position: "relative"
-};
-
-const messagesPane: React.CSSProperties = {
-  flex: 1,
-  padding: "12px 16px",
-  overflowY: "auto",
-  display: "flex",
-  flexDirection: "column",
-  gap: 8
-};
-
-const messageRow: React.CSSProperties = {
-  display: "flex",
-  flexDirection: "column"
-};
-
-const messageHeader: React.CSSProperties = {
-  display: "flex",
-  alignItems: "baseline",
-  gap: 6,
-  fontSize: 12
-};
-
-const messageAuthor: React.CSSProperties = {
-  fontWeight: 600
-};
-
-const messageTimestamp: React.CSSProperties = {
-  fontSize: 11,
-  color: theme.textMuted
-};
-
-const messageBubble: React.CSSProperties = {
-  marginTop: 2,
-  background: theme.bgLight,
-  borderRadius: 8,
-  padding: "6px 10px",
-  fontSize: 14
-};
-
-const inputBar: React.CSSProperties = {
-  padding: "8px 12px",
-  borderTop: `1px solid ${theme.border}`,
-  background: theme.bgDark
-};
-
-const input: React.CSSProperties = {
-  width: "100%",
-  borderRadius: 8,
-  border: "none",
-  outline: "none",
-  padding: "8px 10px",
-  background: theme.bgLight,
-  color: theme.text,
-  fontSize: 14
-};
-
-const consoleBar: React.CSSProperties = {
-  borderTop: `1px solid ${theme.border}`,
-  background: theme.bgDark,
-  height: 96,
-  display: "flex",
-  flexDirection: "column"
-};
-
-const consoleHeader: React.CSSProperties = {
-  fontSize: 12,
-  color: theme.textMuted,
-  padding: "4px 10px"
-};
-
-const consoleBody: React.CSSProperties = {
-  flex: 1,
-  padding: "0 10px 6px 10px",
-  overflowY: "auto",
-  fontSize: 12
-};
-
-const consoleLine: React.CSSProperties = {
-  color: theme.textMuted
-};
-
-const cloudZaiPanel: React.CSSProperties = {
-  width: 280,
-  background: theme.bgLight,
-  borderLeft: `1px solid ${theme.border}`,
-  display: "flex",
-  flexDirection: "column"
-};
-
-const cloudZaiHeader: React.CSSProperties = {
-  padding: "10px 12px",
-  borderBottom: `1px solid ${theme.border}`,
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "space-between"
-};
-
-const cloudZaiTitle: React.CSSProperties = {
-  fontSize: 14,
-  fontWeight: 600
-};
-
-const cloudZaiSubtitle: React.CSSProperties = {
-  fontSize: 12,
-  color: theme.textMuted
-};
-
-const cloudZaiBody: React.CSSProperties = {
-  padding: "10px 12px",
-  fontSize: 13,
-  color: theme.textMuted
-};
-
-const cloudZaiText: React.CSSProperties = {
-  marginBottom: 8
 };
